@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 0.1|
+//|                      Professional MT5 Expert Advisor - Version 0.2|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "0.10"
-#property description "ApexScalperPro Version 0.1 - foundation milestone"
+#property version   "0.20"
+#property description "ApexScalperPro Version 0.2 - Indicator Engine"
 
 #include <Trade/Trade.mqh>
 
@@ -21,6 +21,14 @@ input bool   InpEnableTrading           = false;       // Master trading switch
 input bool   InpEnableDashboard         = true;        // Show dashboard
 input bool   InpEnableLogging           = true;        // Print runtime logs
 input string InpLogPrefix               = "ApexScalperPro"; // Log prefix
+input int    InpFastEMAPeriod           = 9;           // Fast EMA period
+input int    InpSlowEMAPeriod           = 21;          // Slow EMA period
+input int    InpATRPeriod               = 14;          // ATR period
+input int    InpADXPeriod               = 14;          // ADX period
+input int    InpVolumeAverageBars       = 20;          // Volume average lookback bars
+input double InpStrongADXLevel          = 25.0;        // Strong trend ADX threshold
+input double InpVolatilityATRPoints     = 100.0;       // Volatile market ATR threshold in points
+input double InpHighVolumeMultiplier    = 1.25;        // High volume multiplier over average
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -150,6 +158,309 @@ public:
    int SpreadPoints(const string symbol)
    {
       return (int)SymbolInfoInteger(symbol, SYMBOL_SPREAD);
+   }
+};
+
+
+//+------------------------------------------------------------------+
+//| Indicator engine                                                 |
+//+------------------------------------------------------------------+
+class CIndicatorEngine
+{
+private:
+   string m_symbols[];
+   int    m_fast_ema_handles[];
+   int    m_slow_ema_handles[];
+   int    m_atr_handles[];
+   int    m_adx_handles[];
+   int    m_volume_handles[];
+   int    m_symbol_count;
+   ENUM_TIMEFRAMES m_timeframe;
+   int    m_fast_ema_period;
+   int    m_slow_ema_period;
+   int    m_atr_period;
+   int    m_adx_period;
+   int    m_volume_average_bars;
+   double m_strong_adx_level;
+   double m_volatility_atr_points;
+   double m_high_volume_multiplier;
+
+   int FindSymbolIndex(const string symbol)
+   {
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         if(m_symbols[index] == symbol)
+            return index;
+      }
+
+      return -1;
+   }
+
+   bool CreateHandle(const int handle, const string symbol, const string indicator_name, CLogger &logger)
+   {
+      if(handle != INVALID_HANDLE)
+         return true;
+
+      logger.Error(StringFormat("%s handle creation failed for %s. LastError=%d", indicator_name, symbol, GetLastError()));
+      return false;
+   }
+
+   double IndicatorValue(const int handle, const int buffer_index, const int shift)
+   {
+      if(handle == INVALID_HANDLE)
+         return 0.0;
+
+      double values[];
+      ArraySetAsSeries(values, true);
+      if(CopyBuffer(handle, buffer_index, shift, 1, values) != 1)
+         return 0.0;
+
+      return values[0];
+   }
+
+   double IndicatorValueForSymbol(const string symbol, const int handles[], const int buffer_index, const int shift)
+   {
+      const int index = FindSymbolIndex(symbol);
+      if(index < 0)
+         return 0.0;
+
+      return IndicatorValue(handles[index], buffer_index, shift);
+   }
+
+   long VolumeForSymbol(const string symbol, const int shift)
+   {
+      const int index = FindSymbolIndex(symbol);
+      if(index < 0 || m_volume_handles[index] == INVALID_HANDLE)
+         return 0;
+
+      double volumes[];
+      ArraySetAsSeries(volumes, true);
+      if(CopyBuffer(m_volume_handles[index], 0, shift, 1, volumes) != 1)
+         return 0;
+
+      return (long)volumes[0];
+   }
+
+public:
+   CIndicatorEngine()
+   {
+      m_symbol_count = 0;
+      m_timeframe = PERIOD_CURRENT;
+      m_fast_ema_period = 0;
+      m_slow_ema_period = 0;
+      m_atr_period = 0;
+      m_adx_period = 0;
+      m_volume_average_bars = 0;
+      m_strong_adx_level = 0.0;
+      m_volatility_atr_points = 0.0;
+      m_high_volume_multiplier = 0.0;
+   }
+
+   bool Init(CMarketDataManager &market_data,
+             const ENUM_TIMEFRAMES timeframe,
+             const int fast_ema_period,
+             const int slow_ema_period,
+             const int atr_period,
+             const int adx_period,
+             const int volume_average_bars,
+             const double strong_adx_level,
+             const double volatility_atr_points,
+             const double high_volume_multiplier,
+             CLogger &logger)
+   {
+      Release();
+
+      m_symbol_count = market_data.SymbolCount();
+      m_timeframe = timeframe;
+      m_fast_ema_period = fast_ema_period;
+      m_slow_ema_period = slow_ema_period;
+      m_atr_period = atr_period;
+      m_adx_period = adx_period;
+      m_volume_average_bars = volume_average_bars;
+      m_strong_adx_level = strong_adx_level;
+      m_volatility_atr_points = volatility_atr_points;
+      m_high_volume_multiplier = high_volume_multiplier;
+
+      ArrayResize(m_symbols, m_symbol_count);
+      ArrayResize(m_fast_ema_handles, m_symbol_count);
+      ArrayResize(m_slow_ema_handles, m_symbol_count);
+      ArrayResize(m_atr_handles, m_symbol_count);
+      ArrayResize(m_adx_handles, m_symbol_count);
+      ArrayResize(m_volume_handles, m_symbol_count);
+
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         m_fast_ema_handles[index] = INVALID_HANDLE;
+         m_slow_ema_handles[index] = INVALID_HANDLE;
+         m_atr_handles[index] = INVALID_HANDLE;
+         m_adx_handles[index] = INVALID_HANDLE;
+         m_volume_handles[index] = INVALID_HANDLE;
+      }
+
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         const string symbol = market_data.SymbolAt(index);
+         m_symbols[index] = symbol;
+
+         ResetLastError();
+         m_fast_ema_handles[index] = iMA(symbol, m_timeframe, m_fast_ema_period, 0, MODE_EMA, PRICE_CLOSE);
+         if(!CreateHandle(m_fast_ema_handles[index], symbol, "Fast EMA", logger))
+         {
+            Release();
+            return false;
+         }
+
+         ResetLastError();
+         m_slow_ema_handles[index] = iMA(symbol, m_timeframe, m_slow_ema_period, 0, MODE_EMA, PRICE_CLOSE);
+         if(!CreateHandle(m_slow_ema_handles[index], symbol, "Slow EMA", logger))
+         {
+            Release();
+            return false;
+         }
+
+         ResetLastError();
+         m_atr_handles[index] = iATR(symbol, m_timeframe, m_atr_period);
+         if(!CreateHandle(m_atr_handles[index], symbol, "ATR", logger))
+         {
+            Release();
+            return false;
+         }
+
+         ResetLastError();
+         m_adx_handles[index] = iADX(symbol, m_timeframe, m_adx_period);
+         if(!CreateHandle(m_adx_handles[index], symbol, "ADX", logger))
+         {
+            Release();
+            return false;
+         }
+
+         ResetLastError();
+         m_volume_handles[index] = iVolumes(symbol, m_timeframe, VOLUME_TICK);
+         if(!CreateHandle(m_volume_handles[index], symbol, "Tick Volume", logger))
+         {
+            Release();
+            return false;
+         }
+      }
+
+      logger.Info(StringFormat("Indicator engine initialized for %d symbol(s).", m_symbol_count));
+      return true;
+   }
+
+   void Release()
+   {
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         if(m_fast_ema_handles[index] != INVALID_HANDLE)
+            IndicatorRelease(m_fast_ema_handles[index]);
+         if(m_slow_ema_handles[index] != INVALID_HANDLE)
+            IndicatorRelease(m_slow_ema_handles[index]);
+         if(m_atr_handles[index] != INVALID_HANDLE)
+            IndicatorRelease(m_atr_handles[index]);
+         if(m_adx_handles[index] != INVALID_HANDLE)
+            IndicatorRelease(m_adx_handles[index]);
+         if(m_volume_handles[index] != INVALID_HANDLE)
+            IndicatorRelease(m_volume_handles[index]);
+      }
+
+      ArrayResize(m_symbols, 0);
+      ArrayResize(m_fast_ema_handles, 0);
+      ArrayResize(m_slow_ema_handles, 0);
+      ArrayResize(m_atr_handles, 0);
+      ArrayResize(m_adx_handles, 0);
+      ArrayResize(m_volume_handles, 0);
+      m_symbol_count = 0;
+   }
+
+   double GetFastEMA(const string symbol = "", const int shift = 0)
+   {
+      return IndicatorValueForSymbol(symbol == "" ? _Symbol : symbol, m_fast_ema_handles, 0, shift);
+   }
+
+   double GetSlowEMA(const string symbol = "", const int shift = 0)
+   {
+      return IndicatorValueForSymbol(symbol == "" ? _Symbol : symbol, m_slow_ema_handles, 0, shift);
+   }
+
+   double GetATR(const string symbol = "", const int shift = 0)
+   {
+      return IndicatorValueForSymbol(symbol == "" ? _Symbol : symbol, m_atr_handles, 0, shift);
+   }
+
+   double GetADX(const string symbol = "", const int shift = 0)
+   {
+      return IndicatorValueForSymbol(symbol == "" ? _Symbol : symbol, m_adx_handles, 0, shift);
+   }
+
+   double GetPlusDI(const string symbol = "", const int shift = 0)
+   {
+      return IndicatorValueForSymbol(symbol == "" ? _Symbol : symbol, m_adx_handles, 1, shift);
+   }
+
+   double GetMinusDI(const string symbol = "", const int shift = 0)
+   {
+      return IndicatorValueForSymbol(symbol == "" ? _Symbol : symbol, m_adx_handles, 2, shift);
+   }
+
+   long GetCurrentVolume(const string symbol = "")
+   {
+      return VolumeForSymbol(symbol == "" ? _Symbol : symbol, 0);
+   }
+
+   double GetAverageVolume(const int bars, const string symbol = "")
+   {
+      const string target_symbol = symbol == "" ? _Symbol : symbol;
+      const int lookback = bars > 0 ? bars : m_volume_average_bars;
+      if(lookback <= 0)
+         return 0.0;
+
+      const int symbol_index = FindSymbolIndex(target_symbol);
+      if(symbol_index < 0 || m_volume_handles[symbol_index] == INVALID_HANDLE)
+         return 0.0;
+
+      double volumes[];
+      ArraySetAsSeries(volumes, true);
+      const int copied = CopyBuffer(m_volume_handles[symbol_index], 0, 1, lookback, volumes);
+      if(copied <= 0)
+         return 0.0;
+
+      double total_volume = 0.0;
+      for(int index = 0; index < copied; index++)
+         total_volume += volumes[index];
+
+      return total_volume / copied;
+   }
+
+   bool TrendIsBullish(const string symbol = "")
+   {
+      return GetFastEMA(symbol) > GetSlowEMA(symbol) && GetPlusDI(symbol) > GetMinusDI(symbol);
+   }
+
+   bool TrendIsBearish(const string symbol = "")
+   {
+      return GetFastEMA(symbol) < GetSlowEMA(symbol) && GetMinusDI(symbol) > GetPlusDI(symbol);
+   }
+
+   bool TrendStrengthStrong(const string symbol = "")
+   {
+      return GetADX(symbol) >= m_strong_adx_level;
+   }
+
+   bool MarketIsVolatile(const string symbol = "")
+   {
+      const string target_symbol = symbol == "" ? _Symbol : symbol;
+      const double point = SymbolInfoDouble(target_symbol, SYMBOL_POINT);
+      if(point <= 0.0)
+         return false;
+
+      return GetATR(target_symbol) / point >= m_volatility_atr_points;
+   }
+
+   bool VolumeIsHigh(const string symbol = "")
+   {
+      const long current_volume = GetCurrentVolume(symbol);
+      const double average_volume = GetAverageVolume(m_volume_average_bars, symbol);
+      return average_volume > 0.0 && (double)current_volume >= average_volume * m_high_volume_multiplier;
    }
 };
 
@@ -288,11 +599,11 @@ public:
       if(!m_enabled)
          return;
 
-      string text = "ApexScalperPro v0.1\n";
+      string text = "ApexScalperPro v0.2\n";
       text += StringFormat("Trading: %s\n", trade_engine.TradingEnabled() ? "enabled" : "disabled");
       text += StringFormat("Symbols: %d\n", market_data.SymbolCount());
       text += StringFormat("Timeframe: %s\n", EnumToString(InpTimeframe));
-      text += "Status: foundation initialized";
+      text += "Status: indicator engine initialized";
       Comment(text);
    }
 
@@ -310,6 +621,7 @@ CLogger            g_logger;
 CMarketDataManager g_market_data;
 CRiskManager       g_risk_manager;
 CTradeEngine       g_trade_engine;
+CIndicatorEngine   g_indicator_engine;
 CDashboard         g_dashboard;
 
 //+------------------------------------------------------------------+
@@ -318,12 +630,17 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 0.1.");
+   g_logger.Info("Initializing ApexScalperPro Version 0.2.");
 
    if(!g_market_data.Init(InpSymbols, _Symbol, g_logger))
       return INIT_FAILED;
 
    g_risk_manager.Init(InpMaxSpreadPoints, InpFixedLot);
+
+   if(!g_indicator_engine.Init(g_market_data, InpTimeframe, InpFastEMAPeriod, InpSlowEMAPeriod, InpATRPeriod, InpADXPeriod,
+                               InpVolumeAverageBars, InpStrongADXLevel, InpVolatilityATRPoints, InpHighVolumeMultiplier, g_logger))
+      return INIT_FAILED;
+
    g_trade_engine.Init(InpMagicNumber, InpDeviationPoints, InpEnableTrading);
    g_dashboard.Init(InpEnableDashboard);
    g_dashboard.Render(g_market_data, g_trade_engine);
@@ -365,6 +682,76 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   g_indicator_engine.Release();
    g_dashboard.Clear();
    g_logger.Info(StringFormat("ApexScalperPro deinitialized. Reason=%d", reason));
+}
+
+
+//+------------------------------------------------------------------+
+//| Global indicator accessors                                       |
+//+------------------------------------------------------------------+
+double GetFastEMA()
+{
+   return g_indicator_engine.GetFastEMA();
+}
+
+double GetSlowEMA()
+{
+   return g_indicator_engine.GetSlowEMA();
+}
+
+double GetATR()
+{
+   return g_indicator_engine.GetATR();
+}
+
+double GetADX()
+{
+   return g_indicator_engine.GetADX();
+}
+
+double GetPlusDI()
+{
+   return g_indicator_engine.GetPlusDI();
+}
+
+double GetMinusDI()
+{
+   return g_indicator_engine.GetMinusDI();
+}
+
+long GetCurrentVolume()
+{
+   return g_indicator_engine.GetCurrentVolume();
+}
+
+double GetAverageVolume(int bars)
+{
+   return g_indicator_engine.GetAverageVolume(bars);
+}
+
+bool TrendIsBullish()
+{
+   return g_indicator_engine.TrendIsBullish();
+}
+
+bool TrendIsBearish()
+{
+   return g_indicator_engine.TrendIsBearish();
+}
+
+bool TrendStrengthStrong()
+{
+   return g_indicator_engine.TrendStrengthStrong();
+}
+
+bool MarketIsVolatile()
+{
+   return g_indicator_engine.MarketIsVolatile();
+}
+
+bool VolumeIsHigh()
+{
+   return g_indicator_engine.VolumeIsHigh();
 }
