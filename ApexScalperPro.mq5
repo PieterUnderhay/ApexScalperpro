@@ -218,7 +218,7 @@ private:
       return values[0];
    }
 
-   double IndicatorValueForSymbol(const string symbol, const int handles[], const int buffer_index, const int shift)
+   double IndicatorValueForSymbol(const string symbol, const int &handles[], const int buffer_index, const int shift)
    {
       const int index = FindSymbolIndex(symbol);
       if(index < 0)
