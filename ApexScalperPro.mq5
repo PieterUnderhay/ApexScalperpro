@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 0.3|
+//|                      Professional MT5 Expert Advisor - Version 0.4|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "0.30"
-#property description "ApexScalperPro Version 0.3 - Market Scanner"
+#property version   "0.40"
+#property description "ApexScalperPro Version 0.4 - Decision Engine"
 
 #include <Trade/Trade.mqh>
 
@@ -725,6 +725,202 @@ public:
    }
 };
 
+
+
+//+------------------------------------------------------------------+
+//| Decision engine                                                   |
+//+------------------------------------------------------------------+
+enum DecisionType
+{
+   DECISION_NO_TRADE = 0,
+   DECISION_BUY = 1,
+   DECISION_SELL = -1
+};
+
+class CDecisionEngine
+{
+private:
+   string       m_symbols[];
+   DecisionType m_decisions[];
+   double       m_confidence[];
+   string       m_reasons[];
+   int          m_symbol_count;
+   int          m_max_spread_points;
+   int          m_minimum_market_score;
+
+   int FindSymbolIndex(const string symbol)
+   {
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         if(m_symbols[index] == symbol)
+            return index;
+      }
+
+      return -1;
+   }
+
+   double ClampConfidence(const double value)
+   {
+      return MathMax(0.0, MathMin(100.0, MathRound(value)));
+   }
+
+   string DecisionToText(const DecisionType decision)
+   {
+      if(decision == DECISION_BUY)
+         return "BUY";
+      if(decision == DECISION_SELL)
+         return "SELL";
+      return "NO TRADE";
+   }
+
+   void AddReason(string &reason, const string item)
+   {
+      if(reason != "")
+         reason += "; ";
+      reason += item;
+   }
+
+public:
+   CDecisionEngine()
+   {
+      m_symbol_count = 0;
+      m_max_spread_points = 0;
+      m_minimum_market_score = 0;
+   }
+
+   bool Init(CMarketDataManager &market_data,
+             const int max_spread_points,
+             const int minimum_market_score,
+             CLogger &logger)
+   {
+      m_symbol_count = market_data.SymbolCount();
+      m_max_spread_points = max_spread_points;
+      m_minimum_market_score = minimum_market_score;
+
+      ArrayResize(m_symbols, m_symbol_count);
+      ArrayResize(m_decisions, m_symbol_count);
+      ArrayResize(m_confidence, m_symbol_count);
+      ArrayResize(m_reasons, m_symbol_count);
+
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         m_symbols[index] = market_data.SymbolAt(index);
+         m_decisions[index] = DECISION_NO_TRADE;
+         m_confidence[index] = 0.0;
+         m_reasons[index] = "Decision engine awaiting market scan";
+      }
+
+      logger.Info(StringFormat("Decision engine initialized for %d symbol(s).", m_symbol_count));
+      return m_symbol_count > 0;
+   }
+
+   DecisionType EvaluateDecision(const string symbol, CIndicatorEngine &indicator_engine, CMarketScanner &scanner, CLogger &logger)
+   {
+      const int index = FindSymbolIndex(symbol);
+      if(index < 0)
+         return DECISION_NO_TRADE;
+
+      const bool bullish = indicator_engine.TrendIsBullish(symbol);
+      const bool bearish = indicator_engine.TrendIsBearish(symbol);
+      const bool strong_adx = indicator_engine.TrendStrengthStrong(symbol);
+      const bool healthy_atr = !scanner.IsHighVolatility(symbol) && indicator_engine.GetATR(symbol) > 0.0;
+      const bool high_volume = indicator_engine.VolumeIsHigh(symbol);
+      const bool acceptable_volume = scanner.IsTickVolumeQualityAcceptable(symbol);
+      const bool acceptable_spread = scanner.IsSpreadQualityAcceptable(symbol);
+      const bool market_score_ok = scanner.GetMarketScore(symbol) >= m_minimum_market_score;
+      const bool tradable_market = scanner.IsMarketTradable(symbol);
+
+      string reason = "";
+      if(bullish)
+         AddReason(reason, "Strong bullish EMA alignment");
+      else if(bearish)
+         AddReason(reason, "Strong bearish trend");
+      else
+         AddReason(reason, "Weak trend");
+
+      AddReason(reason, strong_adx ? "ADX above threshold" : "ADX below threshold");
+      AddReason(reason, healthy_atr ? "Healthy ATR" : "Unhealthy ATR volatility");
+      AddReason(reason, high_volume ? "High volume" : (acceptable_volume ? "Acceptable volume" : "Low volume"));
+      AddReason(reason, acceptable_spread ? "Spread acceptable" : "High spread");
+      AddReason(reason, market_score_ok ? "Market quality score acceptable" : "Low market score");
+
+      double confidence = 0.0;
+      if(bullish || bearish)
+         confidence += 25.0;
+      if(strong_adx)
+         confidence += 20.0;
+      if(healthy_atr)
+         confidence += 15.0;
+      if(high_volume)
+         confidence += 15.0;
+      else if(acceptable_volume)
+         confidence += 8.0;
+      if(acceptable_spread)
+         confidence += 10.0;
+      if(market_score_ok)
+         confidence += 15.0;
+
+      DecisionType decision = DECISION_NO_TRADE;
+      if(tradable_market && strong_adx && healthy_atr && acceptable_spread && acceptable_volume)
+      {
+         if(bullish)
+            decision = DECISION_BUY;
+         else if(bearish)
+            decision = DECISION_SELL;
+      }
+
+      if(decision == DECISION_NO_TRADE)
+         confidence = MathMin(confidence, 59.0);
+
+      m_decisions[index] = decision;
+      m_confidence[index] = ClampConfidence(confidence);
+      m_reasons[index] = reason;
+
+      logger.Info(StringFormat("%s decision: %s Confidence: %.0f%% Reason: %s", symbol, DecisionToText(decision), m_confidence[index], m_reasons[index]));
+
+      return decision;
+   }
+
+   DecisionType EvaluateDecision(const string symbol)
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 ? m_decisions[index] : DECISION_NO_TRADE;
+   }
+
+   bool ShouldBuy(const string symbol)
+   {
+      return EvaluateDecision(symbol) == DECISION_BUY;
+   }
+
+   bool ShouldSell(const string symbol)
+   {
+      return EvaluateDecision(symbol) == DECISION_SELL;
+   }
+
+   bool ShouldTrade(const string symbol)
+   {
+      const DecisionType decision = EvaluateDecision(symbol);
+      return decision == DECISION_BUY || decision == DECISION_SELL;
+   }
+
+   double DecisionConfidence(const string symbol)
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 ? m_confidence[index] : 0.0;
+   }
+
+   string DecisionReason(const string symbol)
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 ? m_reasons[index] : "Decision unavailable";
+   }
+
+   string DecisionText(const string symbol)
+   {
+      return DecisionToText(EvaluateDecision(symbol));
+   }
+};
+
 //+------------------------------------------------------------------+
 //| Risk manager skeleton                                            |
 //+------------------------------------------------------------------+
@@ -855,13 +1051,13 @@ public:
       m_enabled = enabled;
    }
 
-   void Render(CMarketDataManager &market_data, CTradeEngine &trade_engine, CMarketScanner &scanner)
+   void Render(CMarketDataManager &market_data, CTradeEngine &trade_engine, CMarketScanner &scanner, CDecisionEngine &decision_engine)
    {
       if(!m_enabled)
          return;
 
       string primary_symbol = market_data.SymbolAt(0);
-      string text = "ApexScalperPro Version 0.3\n";
+      string text = "ApexScalperPro Version 0.4\n";
       text += StringFormat("Trading: %s\n", trade_engine.TradingEnabled() ? "enabled" : "disabled");
       text += StringFormat("Symbols: %d\n", market_data.SymbolCount());
       text += StringFormat("Timeframe: %s\n", EnumToString(InpTimeframe));
@@ -869,7 +1065,10 @@ public:
       text += StringFormat("Trend: %s (%s)\n", scanner.TrendDirection(primary_symbol), scanner.TrendStrength(primary_symbol));
       text += StringFormat("ADX: %.2f\n", scanner.GetADX(primary_symbol));
       text += StringFormat("Spread: %d points\n", scanner.GetSpreadPoints(primary_symbol));
-      text += StringFormat("Volatility: %s", scanner.Volatility(primary_symbol));
+      text += StringFormat("Volatility: %s\n", scanner.Volatility(primary_symbol));
+      text += StringFormat("Decision: %s\n", decision_engine.DecisionText(primary_symbol));
+      text += StringFormat("Confidence: %.0f%%\n", decision_engine.DecisionConfidence(primary_symbol));
+      text += StringFormat("Reason: %s", decision_engine.DecisionReason(primary_symbol));
       Comment(text);
    }
 
@@ -889,6 +1088,7 @@ CRiskManager       g_risk_manager;
 CTradeEngine       g_trade_engine;
 CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
+CDecisionEngine    g_decision_engine;
 CDashboard         g_dashboard;
 
 //+------------------------------------------------------------------+
@@ -897,7 +1097,7 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 0.3.");
+   g_logger.Info("Initializing ApexScalperPro Version 0.4.");
 
    if(!g_market_data.Init(InpSymbols, _Symbol, g_logger))
       return INIT_FAILED;
@@ -912,10 +1112,15 @@ int OnInit()
                              InpStrongADXLevel, InpRangingADXLevel, InpVolatilityATRPoints, InpHighVolumeMultiplier, g_logger))
       return INIT_FAILED;
 
+   if(!g_decision_engine.Init(g_market_data, InpMaxSpreadPoints, InpMinimumMarketScore, g_logger))
+      return INIT_FAILED;
+
    g_trade_engine.Init(InpMagicNumber, InpDeviationPoints, InpEnableTrading);
    g_dashboard.Init(InpEnableDashboard);
    g_market_scanner.Scan(g_market_data, g_indicator_engine, g_logger);
-   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner);
+   for(int index = 0; index < g_market_data.SymbolCount(); index++)
+      g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_logger);
+   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine);
 
    g_logger.Info("Initialization completed successfully.");
    return INIT_SUCCEEDED;
@@ -937,6 +1142,7 @@ void OnTick()
          continue;
 
       g_market_scanner.ScanSymbol(symbol, g_market_data, g_indicator_engine, g_logger);
+      g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_logger);
 
       const int spread_points = g_market_data.SpreadPoints(symbol);
       if(!g_risk_manager.IsSpreadAllowed(symbol, spread_points, g_logger))
@@ -944,13 +1150,16 @@ void OnTick()
       if(!g_market_scanner.IsMarketTradable(symbol))
          continue;
 
-      // Strategy and decision engine are intentionally added in later milestones; Version 0.3 scans only.
+      // Version 0.4 evaluates decisions only; trade execution remains disabled until a later milestone.
+      if(!g_decision_engine.ShouldTrade(symbol))
+         continue;
+
       const double lot = g_risk_manager.LotSize(symbol);
       if(lot <= 0.0)
          g_logger.Warn(StringFormat("Calculated lot size for %s is invalid: %.2f", symbol, lot));
    }
 
-   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner);
+   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine);
 }
 
 //+------------------------------------------------------------------+
@@ -1054,4 +1263,38 @@ string TrendDirection()
 string TrendStrength()
 {
    return g_market_scanner.TrendStrength();
+}
+
+
+//+------------------------------------------------------------------+
+//| Global decision engine accessors                                 |
+//+------------------------------------------------------------------+
+DecisionType EvaluateDecision(string symbol)
+{
+   return g_decision_engine.EvaluateDecision(symbol);
+}
+
+bool ShouldBuy(string symbol)
+{
+   return g_decision_engine.ShouldBuy(symbol);
+}
+
+bool ShouldSell(string symbol)
+{
+   return g_decision_engine.ShouldSell(symbol);
+}
+
+bool ShouldTrade(string symbol)
+{
+   return g_decision_engine.ShouldTrade(symbol);
+}
+
+double DecisionConfidence(string symbol)
+{
+   return g_decision_engine.DecisionConfidence(symbol);
+}
+
+string DecisionReason(string symbol)
+{
+   return g_decision_engine.DecisionReason(symbol);
 }
