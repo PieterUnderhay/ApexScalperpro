@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 0.8|
+//|                      Professional MT5 Expert Advisor - Version 0.9|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "0.800"
-#property description "ApexScalperPro Version 0.8 - Position and Hedging Infrastructure"
+#property version   "0.900"
+#property description "ApexScalperPro Version 0.9 - Decision Statistics"
 
 #include <Trade/Trade.mqh>
 
@@ -591,45 +591,7 @@ public:
          m_symbols[index] = market_data.SymbolAt(index);
          m_scores[index] = 0;
          m_trends[index] = MARKET_TREND_RANGE;
-         m…3218 tokens truncated…tside trading session");
-
-      double confidence = 0.0;
-      if(bullish || bearish)
-         confidence += 20.0;
-      if(strong_adx)
-         confidence += 20.0;
-      if(healthy_atr)
-         confidence += 15.0;
-      if(ema_gap_ok)
-         confidence += 15.0;
-      if(directional_di_gap_ok)
-         confidence += 10.0;
-      if(high_volume)
-         confidence += 10.0;
-      else if(acceptable_volume)
-         confidence += 5.0;
-      if(acceptable_spread)
-         confidence += 5.0;
-      if(market_score_ok)
-         confidence += 5.0;
-
-      DecisionType decision = DECISION_NO_TRADE;
-      if(data_available && tradable_market && session_allowed && strong_adx && healthy_atr && ema_gap_ok && directional_di_gap_ok && acceptable_spread && acceptable_volume && confidence >= m_minimum_confidence)
-      {
-         if(bullish)
-            decision = DECISION_BUY;
-         else if(bearish)
-            decision = DECISION_SELL;
-      }
-
-      if(decision == DECISION_NO_TRADE)
-         confidence = MathMin(confidence, (double)(m_minimum_confidence - 1));
-
-      m_decisions[index] = decision;
-      m_confidence[index] = ClampConfidence(confidence);
-      m_reasons[index] = reason;
-
-      logger.Info(StringFormat("%s decision: %s Confidence: %.0f%% Reason: %s", symbol, DecisionToText(decision), m_confidence[index], m_reasons[index]));
+         m_adx_values[inde…3514 tokens truncated…   logger.Info(StringFormat("%s decision: %s Confidence: %.0f%% Reason: %s", symbol, DecisionToText(decision), m_confidence[index], m_reasons[index]));
 
       return decision;
    }
@@ -917,7 +879,44 @@ public:
 };
 
 //+------------------------------------------------------------------+
-//| Dashboard skeleton                                               |
+//| Statistics                                                       |
+//+------------------------------------------------------------------+
+class CStatistics
+{
+private:
+   long m_evaluations;
+   long m_buy_decisions;
+   long m_sell_decisions;
+   long m_no_trade_decisions;
+
+public:
+   void Reset()
+   {
+      m_evaluations = 0;
+      m_buy_decisions = 0;
+      m_sell_decisions = 0;
+      m_no_trade_decisions = 0;
+   }
+
+   void RecordDecision(const DecisionType decision)
+   {
+      m_evaluations++;
+      if(decision == DECISION_BUY)
+         m_buy_decisions++;
+      else if(decision == DECISION_SELL)
+         m_sell_decisions++;
+      else
+         m_no_trade_decisions++;
+   }
+
+   string DecisionSummary()
+   {
+      return StringFormat("Evaluations: %I64d | BUY: %I64d | SELL: %I64d | NO TRADE: %I64d", m_evaluations, m_buy_decisions, m_sell_decisions, m_no_trade_decisions);
+   }
+};
+
+//+------------------------------------------------------------------+
+//| Dashboard                                                        |
 //+------------------------------------------------------------------+
 class CDashboard
 {
@@ -930,7 +929,7 @@ public:
       m_enabled = enabled;
    }
 
-   void Render(CMarketDataManager &market_data, CTradeEngine &trade_engine, CMarketScanner &scanner, CDecisionEngine &decision_engine)
+   void Render(CMarketDataManager &market_data, CTradeEngine &trade_engine, CMarketScanner &scanner, CDecisionEngine &decision_engine, CStatistics &statistics)
    {
       if(!m_enabled)
          return;
@@ -948,6 +947,7 @@ public:
       text += StringFormat("Decision: %s\n", decision_engine.DecisionText(primary_symbol));
       text += StringFormat("Confidence: %.0f%%\n", decision_engine.DecisionConfidence(primary_symbol));
       text += StringFormat("Reason: %s", decision_engine.DecisionReason(primary_symbol));
+      text += StringFormat("\n%s", statistics.DecisionSummary());
       Comment(text);
    }
 
@@ -972,6 +972,7 @@ CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
 CSessionFilter     g_session_filter;
 CDecisionEngine    g_decision_engine;
+CStatistics        g_statistics;
 CDashboard         g_dashboard;
 
 //+------------------------------------------------------------------+
@@ -980,7 +981,7 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 0.8.");
+   g_logger.Info("Initializing ApexScalperPro Version 0.9.");
 
    if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0 || InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23 || InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0 || InpMaxManagedPositions < 1)
    {
@@ -1010,11 +1011,12 @@ int OnInit()
       return INIT_FAILED;
 
    g_trade_engine.Init(InpMagicNumber, InpDeviationPoints, InpEnableTrading);
+   g_statistics.Reset();
    g_dashboard.Init(InpEnableDashboard);
    g_market_scanner.Scan(g_market_data, g_indicator_engine, g_logger);
    for(int index = 0; index < g_market_data.SymbolCount(); index++)
-      g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_session_filter, g_logger);
-   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine);
+      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_session_filter, g_logger));
+   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics);
 
    g_logger.Info("Initialization completed successfully.");
    return INIT_SUCCEEDED;
@@ -1036,7 +1038,7 @@ void OnTick()
          continue;
 
       g_market_scanner.ScanSymbol(symbol, g_market_data, g_indicator_engine, g_logger);
-      g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_logger);
+      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_logger));
 
       const int spread_points = g_market_data.SpreadPoints(symbol);
       if(!g_risk_manager.IsSpreadAllowed(symbol, spread_points, g_logger))
@@ -1056,7 +1058,7 @@ void OnTick()
          g_logger.Warn(StringFormat("Calculated lot size for %s is invalid: %.2f", symbol, lot));
    }
 
-   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine);
+   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics);
 }
 
 //+------------------------------------------------------------------+
