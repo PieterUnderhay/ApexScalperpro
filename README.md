@@ -13,3 +13,7 @@ Run single-variable and walk-forward tests with fixed data, modelling mode, date
 ### Phase 2 controls
 
 The Phase 2 branch adds two independently configurable entry-quality controls: closed-candle body confirmation (`InpUseCandleConfirmation`, `InpMinimumCandleBodyATR`) and qualified-signal cooldown (`InpUseDecisionCooldown`, `InpDecisionCooldownSeconds`). Test each against the same baseline before combining them.
+
+### Strategy Tester execution
+
+To permit orders in MT5 Strategy Tester, set both `InpEnableTrading=true` and `InpEnableStrategyTesterTrading=true`. The Trade Engine additionally checks `MQL_TESTER`, so live execution remains blocked. New positions use configurable ATR stop-loss and take-profit distances; the Trade Manager can apply break-even and ATR trailing protection. Optimise these controls with fixed test data and realistic spread/commission assumptions.
