@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 0.7|
+//|                      Professional MT5 Expert Advisor - Version 0.8|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "0.700"
-#property description "ApexScalperPro Version 0.7 - Money Management Infrastructure"
+#property version   "0.800"
+#property description "ApexScalperPro Version 0.8 - Position and Hedging Infrastructure"
 
 #include <Trade/Trade.mqh>
 
@@ -40,6 +40,8 @@ input int    InpSessionEndHour            = 20;         // Session end hour, ser
 input bool   InpUseDynamicLotSizing        = false;      // Use equity-risk sizing instead of fixed lots
 input double InpRiskPerTradePercent        = 0.50;       // Equity risk percentage for dynamic lot sizing
 input int    InpReferenceStopPoints        = 100;        // Reference stop distance for risk sizing
+input int    InpMaxManagedPositions        = 1;          // Future maximum positions per symbol and magic number
+input bool   InpAllowHedging                = false;      // Future permission for opposite-direction managed exposure
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -589,52 +591,7 @@ public:
          m_symbols[index] = market_data.SymbolAt(index);
          m_scores[index] = 0;
          m_trends[index] = MARKET_TREND_RANGE;
-         m_adx_values[index] = 0.0;
-         m_atr_points[index] = 0.0;
-         m_spread_points[index] = 0;
-         m_volume_ratios[index] = 0.0;
-         m_tradable[index] = false;
-         m_ranging[index] = true;
-         m_high_volatility[i…2463 tokens truncated…      if(index < 0)
-         return DECISION_NO_TRADE;
-
-      const int confirmed_shift = 1;
-      const double fast_ema = indicator_engine.GetFastEMA(symbol, confirmed_shift);
-      const double slow_ema = indicator_engine.GetSlowEMA(symbol, confirmed_shift);
-      const double atr = indicator_engine.GetATR(symbol, confirmed_shift);
-      const double plus_di = indicator_engine.GetPlusDI(symbol, confirmed_shift);
-      const double minus_di = indicator_engine.GetMinusDI(symbol, confirmed_shift);
-      const bool data_available = fast_ema > 0.0 && slow_ema > 0.0 && atr > 0.0;
-      const bool bullish = data_available && indicator_engine.TrendIsBullish(symbol, confirmed_shift);
-      const bool bearish = data_available && indicator_engine.TrendIsBearish(symbol, confirmed_shift);
-      const bool strong_adx = data_available && indicator_engine.TrendStrengthStrong(symbol, confirmed_shift);
-      const bool healthy_atr = data_available && !indicator_engine.MarketIsVolatile(symbol, confirmed_shift);
-      const bool ema_gap_ok = data_available && MathAbs(fast_ema - slow_ema) / atr >= m_minimum_ema_gap_atr;
-      const bool directional_di_gap_ok = data_available && MathAbs(plus_di - minus_di) >= m_minimum_directional_di_gap;
-      const bool high_volume = indicator_engine.VolumeIsHigh(symbol, confirmed_shift);
-      const bool acceptable_volume = scanner.IsTickVolumeQualityAcceptable(symbol);
-      const bool acceptable_spread = scanner.IsSpreadQualityAcceptable(symbol);
-      const bool market_score_ok = scanner.GetMarketScore(symbol) >= m_minimum_market_score;
-      const bool tradable_market = scanner.IsMarketTradable(symbol);
-      const bool session_allowed = session_filter.IsAllowed();
-
-      string reason = "";
-      AddReason(reason, data_available ? "Closed-bar data confirmed" : "Insufficient closed-bar data");
-      if(bullish)
-         AddReason(reason, "Bullish EMA/DI alignment");
-      else if(bearish)
-         AddReason(reason, "Bearish EMA/DI alignment");
-      else
-         AddReason(reason, "Weak trend");
-
-      AddReason(reason, strong_adx ? "ADX above threshold" : "ADX below threshold");
-      AddReason(reason, healthy_atr ? "Healthy ATR" : "Unhealthy ATR volatility");
-      AddReason(reason, ema_gap_ok ? "EMA separation confirmed" : "EMA separation too narrow");
-      AddReason(reason, directional_di_gap_ok ? "DI separation confirmed" : "DI separation too narrow");
-      AddReason(reason, high_volume ? "High volume" : (acceptable_volume ? "Acceptable volume" : "Low volume"));
-      AddReason(reason, acceptable_spread ? "Spread acceptable" : "High spread");
-      AddReason(reason, market_score_ok ? "Market quality score acceptable" : "Low market score");
-      AddReason(reason, session_allowed ? "Session allowed" : "Outside trading session");
+         m…3218 tokens truncated…tside trading session");
 
       double confidence = 0.0;
       if(bullish || bearish)
@@ -817,6 +774,79 @@ public:
 };
 
 //+------------------------------------------------------------------+
+//| Position manager                                                 |
+//+------------------------------------------------------------------+
+class CPositionManager
+{
+private:
+   ulong m_magic_number;
+   int   m_max_positions;
+
+public:
+   void Init(const ulong magic_number, const int max_positions)
+   {
+      m_magic_number = magic_number;
+      m_max_positions = max_positions;
+   }
+
+   int ManagedPositionCount(const string symbol)
+   {
+      int count = 0;
+      for(int index = 0; index < PositionsTotal(); index++)
+      {
+         const ulong ticket = PositionGetTicket(index);
+         if(ticket == 0 || !PositionSelectByTicket(ticket))
+            continue;
+         if(PositionGetString(POSITION_SYMBOL) == symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == m_magic_number)
+            count++;
+      }
+      return count;
+   }
+
+   bool HasDirection(const string symbol, const ENUM_POSITION_TYPE direction)
+   {
+      for(int index = 0; index < PositionsTotal(); index++)
+      {
+         const ulong ticket = PositionGetTicket(index);
+         if(ticket == 0 || !PositionSelectByTicket(ticket))
+            continue;
+         if(PositionGetString(POSITION_SYMBOL) == symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == m_magic_number && (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == direction)
+            return true;
+      }
+      return false;
+   }
+
+   bool CanOpenPosition(const string symbol)
+   {
+      return ManagedPositionCount(symbol) < m_max_positions;
+   }
+};
+
+//+------------------------------------------------------------------+
+//| Hedging manager                                                  |
+//+------------------------------------------------------------------+
+class CHedgingManager
+{
+private:
+   bool m_allow_hedging;
+
+public:
+   void Init(const bool allow_hedging)
+   {
+      m_allow_hedging = allow_hedging;
+   }
+
+   bool CanOpenDirection(const string symbol, const DecisionType decision, CPositionManager &position_manager)
+   {
+      if(m_allow_hedging || decision == DECISION_NO_TRADE)
+         return true;
+      if(decision == DECISION_BUY)
+         return !position_manager.HasDirection(symbol, POSITION_TYPE_SELL);
+      return !position_manager.HasDirection(symbol, POSITION_TYPE_BUY);
+   }
+};
+
+//+------------------------------------------------------------------+
 //| Trade engine                                                     |
 //+------------------------------------------------------------------+
 class CTradeEngine
@@ -935,6 +965,8 @@ CLogger            g_logger;
 CMarketDataManager g_market_data;
 CRiskManager       g_risk_manager;
 CMoneyManagement   g_money_management;
+CPositionManager   g_position_manager;
+CHedgingManager    g_hedging_manager;
 CTradeEngine       g_trade_engine;
 CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
@@ -948,9 +980,9 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 0.7.");
+   g_logger.Info("Initializing ApexScalperPro Version 0.8.");
 
-   if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0 || InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23 || InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0)
+   if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0 || InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23 || InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0 || InpMaxManagedPositions < 1)
    {
       g_logger.Error("Invalid inputs. Check Decision Engine, session, and money-management parameters.");
       return INIT_PARAMETERS_INCORRECT;
@@ -961,6 +993,8 @@ int OnInit()
 
    g_risk_manager.Init(InpMaxSpreadPoints, InpFixedLot);
    g_money_management.Init(InpUseDynamicLotSizing, InpRiskPerTradePercent, InpReferenceStopPoints, InpFixedLot);
+   g_position_manager.Init(InpMagicNumber, InpMaxManagedPositions);
+   g_hedging_manager.Init(InpAllowHedging);
 
    if(!g_indicator_engine.Init(g_market_data, InpTimeframe, InpFastEMAPeriod, InpSlowEMAPeriod, InpATRPeriod, InpADXPeriod,
                                InpVolumeAverageBars, InpStrongADXLevel, InpVolatilityATRPoints, InpHighVolumeMultiplier, g_logger))
@@ -1012,6 +1046,9 @@ void OnTick()
 
       // Version 0.4 evaluates decisions only; trade execution remains disabled until a later milestone.
       if(!g_decision_engine.ShouldTrade(symbol))
+         continue;
+      const DecisionType decision = g_decision_engine.EvaluateDecision(symbol);
+      if(!g_position_manager.CanOpenPosition(symbol) || !g_hedging_manager.CanOpenDirection(symbol, decision, g_position_manager))
          continue;
 
       const double lot = g_risk_manager.NormalizeLot(symbol, g_money_management.CalculateLot(symbol, InpReferenceStopPoints));
