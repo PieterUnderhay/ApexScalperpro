@@ -25,3 +25,7 @@ Phase 3 adds configurable market-structure, support/resistance, and higher-timef
 ### Phase 4 telemetry
 
 Phase 4 logs qualified trade candidates, including confidence and all active filter reasons, and records close reasons and net results from MT5 deal history. Dashboard statistics include signals, rejections, executed trades, wins/losses, average R, and consecutive win/loss streaks to support repeatable optimisation comparisons.
+
+### Phase 5 research export
+
+When `InpEnableResearchExport=true`, completed Strategy Tester trades are written to the configured CSV file under `MQL5/Files`. The test-end log includes core profitability, drawdown, win-rate, and R-multiple summary metrics. Keep the file name unique per optimisation run when retaining multiple result sets.
