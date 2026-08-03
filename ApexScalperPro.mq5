@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 0.5|
+//|                      Professional MT5 Expert Advisor - Version 0.6|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "0.500"
-#property description "ApexScalperPro Version 0.5 - Confirmed Decision Engine"
+#property version   "0.600"
+#property description "ApexScalperPro Version 0.6 - Session-Aware Decision Engine"
 
 #include <Trade/Trade.mqh>
 
@@ -34,6 +34,9 @@ input double InpRangingADXLevel          = 18.0;        // Ranging market ADX th
 input int    InpMinimumDecisionConfidence = 70;         // Minimum confidence required for BUY or SELL
 input double InpMinimumEMAGapATR          = 0.10;       // Minimum EMA separation as a fraction of ATR
 input double InpMinimumDirectionalDIGap   = 3.0;        // Minimum +DI/-DI separation
+input bool   InpUseSessionFilter          = true;       // Restrict decisions to configured server-time session
+input int    InpSessionStartHour          = 7;          // Session start hour, server time (0..23)
+input int    InpSessionEndHour            = 20;         // Session end hour, server time (0..23, end exclusive)
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -598,32 +601,7 @@ public:
 
    bool ScanSymbol(const string symbol, CMarketDataManager &market_data, CIndicatorEngine &indicator_engine, CLogger &logger)
    {
-      const int index = FindSymbolIndex(symbol);
-      if(index < 0)
-         return false;
-
-      const double fast_ema = indicator_engine.GetFastEMA(symbol);
-      const double slow_ema = indicator_engine.GetSlowEMA(symbol);
-      const double plus_di = indicator_engine.GetPlusDI(symbol);
-      const double minus_di = indicator_engine.GetMinusDI…1307 tokens truncated… DECISION_BUY = 1,
-   DECISION_SELL = -1
-};
-
-class CDecisionEngine
-{
-private:
-   string       m_symbols[];
-   DecisionType m_decisions[];
-   double       m_confidence[];
-   string       m_reasons[];
-   int          m_symbol_count;
-   int          m_max_spread_points;
-   int          m_minimum_market_score;
-   int          m_minimum_confidence;
-   double       m_minimum_ema_gap_atr;
-   double       m_minimum_directional_di_gap;
-
-   int FindSymbolIndex(const string symbol)
+      const int index …1799 tokens truncated…st string symbol)
    {
       for(int index = 0; index < m_symbol_count; index++)
       {
@@ -698,7 +676,7 @@ public:
       return m_symbol_count > 0;
    }
 
-   DecisionType EvaluateDecision(const string symbol, CIndicatorEngine &indicator_engine, CMarketScanner &scanner, CLogger &logger)
+   DecisionType EvaluateDecision(const string symbol, CIndicatorEngine &indicator_engine, CMarketScanner &scanner, CSessionFilter &session_filter, CLogger &logger)
    {
       const int index = FindSymbolIndex(symbol);
       if(index < 0)
@@ -722,6 +700,7 @@ public:
       const bool acceptable_spread = scanner.IsSpreadQualityAcceptable(symbol);
       const bool market_score_ok = scanner.GetMarketScore(symbol) >= m_minimum_market_score;
       const bool tradable_market = scanner.IsMarketTradable(symbol);
+      const bool session_allowed = session_filter.IsAllowed();
 
       string reason = "";
       AddReason(reason, data_available ? "Closed-bar data confirmed" : "Insufficient closed-bar data");
@@ -739,6 +718,7 @@ public:
       AddReason(reason, high_volume ? "High volume" : (acceptable_volume ? "Acceptable volume" : "Low volume"));
       AddReason(reason, acceptable_spread ? "Spread acceptable" : "High spread");
       AddReason(reason, market_score_ok ? "Market quality score acceptable" : "Low market score");
+      AddReason(reason, session_allowed ? "Session allowed" : "Outside trading session");
 
       double confidence = 0.0;
       if(bullish || bearish)
@@ -761,7 +741,7 @@ public:
          confidence += 5.0;
 
       DecisionType decision = DECISION_NO_TRADE;
-      if(data_available && tradable_market && strong_adx && healthy_atr && ema_gap_ok && directional_di_gap_ok && acceptable_spread && acceptable_volume && confidence >= m_minimum_confidence)
+      if(data_available && tradable_market && session_allowed && strong_adx && healthy_atr && ema_gap_ok && directional_di_gap_ok && acceptable_spread && acceptable_volume && confidence >= m_minimum_confidence)
       {
          if(bullish)
             decision = DECISION_BUY;
@@ -988,6 +968,7 @@ CRiskManager       g_risk_manager;
 CTradeEngine       g_trade_engine;
 CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
+CSessionFilter     g_session_filter;
 CDecisionEngine    g_decision_engine;
 CDashboard         g_dashboard;
 
@@ -997,11 +978,11 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 0.5.");
+   g_logger.Info("Initializing ApexScalperPro Version 0.6.");
 
-   if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0)
+   if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0 || InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23)
    {
-      g_logger.Error("Invalid Decision Engine inputs. Confidence must be 1..100 and separation thresholds cannot be negative.");
+      g_logger.Error("Invalid Decision Engine inputs. Check confidence, separation thresholds, and session hours.");
       return INIT_PARAMETERS_INCORRECT;
    }
 
@@ -1018,6 +999,7 @@ int OnInit()
                              InpStrongADXLevel, InpRangingADXLevel, InpVolatilityATRPoints, InpHighVolumeMultiplier, g_logger))
       return INIT_FAILED;
 
+   g_session_filter.Init(InpUseSessionFilter, InpSessionStartHour, InpSessionEndHour);
    if(!g_decision_engine.Init(g_market_data, InpMaxSpreadPoints, InpMinimumMarketScore,
                               InpMinimumDecisionConfidence, InpMinimumEMAGapATR, InpMinimumDirectionalDIGap, g_logger))
       return INIT_FAILED;
@@ -1026,7 +1008,7 @@ int OnInit()
    g_dashboard.Init(InpEnableDashboard);
    g_market_scanner.Scan(g_market_data, g_indicator_engine, g_logger);
    for(int index = 0; index < g_market_data.SymbolCount(); index++)
-      g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_logger);
+      g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_session_filter, g_logger);
    g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine);
 
    g_logger.Info("Initialization completed successfully.");
@@ -1049,7 +1031,7 @@ void OnTick()
          continue;
 
       g_market_scanner.ScanSymbol(symbol, g_market_data, g_indicator_engine, g_logger);
-      g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_logger);
+      g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_logger);
 
       const int spread_points = g_market_data.SpreadPoints(symbol);
       if(!g_risk_manager.IsSpreadAllowed(symbol, spread_points, g_logger))
