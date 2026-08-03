@@ -1,5 +1,15 @@
 # Changelog
 
+## Phase 3 - Intelligent Decision Engine
+
+- Adds Market Structure analysis for higher highs/lows, lower highs/lows, break of structure, and change of character states.
+- Adds automatic swing-derived support/resistance levels and configurable rejection of entries too near the opposing level.
+- Adds configurable higher-timeframe EMA, ADX, and DI confirmation.
+- Integrates structure, support/resistance, and multi-timeframe checks into the existing decision gate without changing execution architecture.
+- Dashboard now displays session, market structure, and support/resistance distance diagnostics.
+- Adds validation for all new structure, support/resistance, timeframe, and trend-score controls.
+- Compiles with 0 errors and 0 warnings.
+
 ## Phase 2 - Strategy Tester execution and trade management
 
 - Adds the first executable entry path, permitted only when both `InpEnableTrading` and `InpEnableStrategyTesterTrading` are true and the EA is running in MT5 Strategy Tester. Live execution remains blocked.
