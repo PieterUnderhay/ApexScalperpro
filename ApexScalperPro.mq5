@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 0.4|
+//|                      Professional MT5 Expert Advisor - Version 0.5|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "0.40"
-#property description "ApexScalperPro Version 0.4 - Decision Engine"
+#property version   "0.500"
+#property description "ApexScalperPro Version 0.5 - Confirmed Decision Engine"
 
 #include <Trade/Trade.mqh>
 
@@ -31,6 +31,9 @@ input double InpVolatilityATRPoints     = 100.0;       // Volatile market ATR th
 input double InpHighVolumeMultiplier    = 1.25;        // High volume multiplier over average
 input int    InpMinimumMarketScore       = 60;          // Minimum market quality score
 input double InpRangingADXLevel          = 18.0;        // Ranging market ADX threshold
+input int    InpMinimumDecisionConfidence = 70;         // Minimum confidence required for BUY or SELL
+input double InpMinimumEMAGapATR          = 0.10;       // Minimum EMA separation as a fraction of ATR
+input double InpMinimumDirectionalDIGap   = 3.0;        // Minimum +DI/-DI separation
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -404,9 +407,9 @@ public:
       return IndicatorValueForSymbol(symbol == "" ? _Symbol : symbol, m_adx_handles, 2, shift);
    }
 
-   long GetCurrentVolume(const string symbol = "")
+   long GetCurrentVolume(const string symbol = "", const int shift = 0)
    {
-      return VolumeForSymbol(symbol == "" ? _Symbol : symbol, 0);
+      return VolumeForSymbol(symbol == "" ? _Symbol : symbol, shift);
    }
 
    double GetAverageVolume(const int bars, const string symbol = "")
@@ -433,34 +436,34 @@ public:
       return total_volume / copied;
    }
 
-   bool TrendIsBullish(const string symbol = "")
+   bool TrendIsBullish(const string symbol = "", const int shift = 0)
    {
-      return GetFastEMA(symbol) > GetSlowEMA(symbol) && GetPlusDI(symbol) > GetMinusDI(symbol);
+      return GetFastEMA(symbol, shift) > GetSlowEMA(symbol, shift) && GetPlusDI(symbol, shift) > GetMinusDI(symbol, shift);
    }
 
-   bool TrendIsBearish(const string symbol = "")
+   bool TrendIsBearish(const string symbol = "", const int shift = 0)
    {
-      return GetFastEMA(symbol) < GetSlowEMA(symbol) && GetMinusDI(symbol) > GetPlusDI(symbol);
+      return GetFastEMA(symbol, shift) < GetSlowEMA(symbol, shift) && GetMinusDI(symbol, shift) > GetPlusDI(symbol, shift);
    }
 
-   bool TrendStrengthStrong(const string symbol = "")
+   bool TrendStrengthStrong(const string symbol = "", const int shift = 0)
    {
-      return GetADX(symbol) >= m_strong_adx_level;
+      return GetADX(symbol, shift) >= m_strong_adx_level;
    }
 
-   bool MarketIsVolatile(const string symbol = "")
+   bool MarketIsVolatile(const string symbol = "", const int shift = 0)
    {
       const string target_symbol = symbol == "" ? _Symbol : symbol;
       const double point = SymbolInfoDouble(target_symbol, SYMBOL_POINT);
       if(point <= 0.0)
          return false;
 
-      return GetATR(target_symbol) / point >= m_volatility_atr_points;
+      return GetATR(target_symbol, shift) / point >= m_volatility_atr_points;
    }
 
-   bool VolumeIsHigh(const string symbol = "")
+   bool VolumeIsHigh(const string symbol = "", const int shift = 0)
    {
-      const long current_volume = GetCurrentVolume(symbol);
+      const long current_volume = GetCurrentVolume(symbol, shift);
       const double average_volume = GetAverageVolume(m_volume_average_bars, symbol);
       return average_volume > 0.0 && (double)current_volume >= average_volume * m_high_volume_multiplier;
    }
@@ -602,138 +605,7 @@ public:
       const double fast_ema = indicator_engine.GetFastEMA(symbol);
       const double slow_ema = indicator_engine.GetSlowEMA(symbol);
       const double plus_di = indicator_engine.GetPlusDI(symbol);
-      const double minus_di = indicator_engine.GetMinusDI(symbol);
-      const double adx = indicator_engine.GetADX(symbol);
-      const double atr = indicator_engine.GetATR(symbol);
-      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-      const long current_volume = indicator_engine.GetCurrentVolume(symbol);
-      const double average_volume = indicator_engine.GetAverageVolume(m_volume_average_bars, symbol);
-      const int spread = market_data.SpreadPoints(symbol);
-
-      m_adx_values[index] = adx;
-      m_spread_points[index] = spread;
-      m_atr_points[index] = point > 0.0 ? atr / point : 0.0;
-      m_volume_ratios[index] = average_volume > 0.0 ? (double)current_volume / average_volume : 0.0;
-      m_high_volatility[index] = m_atr_points[index] >= m_volatility_atr_points;
-      m_ranging[index] = adx <= m_ranging_adx_level || MathAbs(fast_ema - slow_ema) <= point * 2.0;
-
-      if(m_ranging[index])
-         m_trends[index] = MARKET_TREND_RANGE;
-      else if(fast_ema > slow_ema && plus_di >= minus_di)
-         m_trends[index] = MARKET_TREND_BULLISH;
-      else if(fast_ema < slow_ema && minus_di > plus_di)
-         m_trends[index] = MARKET_TREND_BEARISH;
-      else
-         m_trends[index] = MARKET_TREND_RANGE;
-
-      const double ema_score = m_trends[index] == MARKET_TREND_RANGE ? 0.0 : 25.0;
-      const double adx_score = 25.0 * ComponentScore(adx, m_strong_adx_level);
-      const double atr_score = m_high_volatility[index] ? 10.0 : 20.0 * ComponentScore(m_atr_points[index], m_volatility_atr_points);
-      const double volume_score = 15.0 * ComponentScore(m_volume_ratios[index], m_high_volume_multiplier);
-      const double spread_score = spread <= m_max_spread_points ? 15.0 * (1.0 - ((double)spread / MathMax(1.0, (double)m_max_spread_points)) * 0.5) : 0.0;
-
-      m_scores[index] = ClampScore(ema_score + adx_score + atr_score + volume_score + spread_score);
-      m_tradable[index] = m_scores[index] >= m_minimum_market_score && !m_ranging[index] && spread <= m_max_spread_points && average_volume > 0.0;
-
-      logger.Info(StringFormat("%s scan: score=%d trend=%s adx=%.2f spread=%d atr=%.1f volume=%.2f tradable=%s",
-                               symbol, m_scores[index], TrendToText(m_trends[index]), adx, spread,
-                               m_atr_points[index], m_volume_ratios[index], m_tradable[index] ? "true" : "false"));
-      return true;
-   }
-
-   void Scan(CMarketDataManager &market_data, CIndicatorEngine &indicator_engine, CLogger &logger)
-   {
-      for(int index = 0; index < m_symbol_count; index++)
-      {
-         if(m_symbols[index] != "")
-            ScanSymbol(m_symbols[index], market_data, indicator_engine, logger);
-      }
-   }
-
-   bool IsMarketTradable(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 && m_tradable[index];
-   }
-
-   int GetMarketScore(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 ? m_scores[index] : 0;
-   }
-
-   string TrendDirection(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 ? TrendToText(m_trends[index]) : "Unknown";
-   }
-
-   string TrendStrength(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      if(index < 0)
-         return "Unknown";
-      if(m_ranging[index])
-         return "Ranging";
-      if(m_adx_values[index] >= m_strong_adx_level)
-         return "Strong";
-      return "Developing";
-   }
-
-   double GetADX(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 ? m_adx_values[index] : 0.0;
-   }
-
-   int GetSpreadPoints(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 ? m_spread_points[index] : 0;
-   }
-
-   string Volatility(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      if(index < 0)
-         return "Unknown";
-      return m_high_volatility[index] ? "High" : "Normal";
-   }
-
-   bool IsRanging(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 && m_ranging[index];
-   }
-
-   bool IsHighVolatility(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 && m_high_volatility[index];
-   }
-
-   bool IsSpreadQualityAcceptable(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 && m_spread_points[index] <= m_max_spread_points;
-   }
-
-   bool IsTickVolumeQualityAcceptable(const string symbol = "")
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 && m_volume_ratios[index] >= 1.0;
-   }
-};
-
-
-
-//+------------------------------------------------------------------+
-//| Decision engine                                                   |
-//+------------------------------------------------------------------+
-enum DecisionType
-{
-   DECISION_NO_TRADE = 0,
-   DECISION_BUY = 1,
+      const double minus_di = indicator_engine.GetMinusDI…1307 tokens truncated… DECISION_BUY = 1,
    DECISION_SELL = -1
 };
 
@@ -747,6 +619,9 @@ private:
    int          m_symbol_count;
    int          m_max_spread_points;
    int          m_minimum_market_score;
+   int          m_minimum_confidence;
+   double       m_minimum_ema_gap_atr;
+   double       m_minimum_directional_di_gap;
 
    int FindSymbolIndex(const string symbol)
    {
@@ -786,16 +661,25 @@ public:
       m_symbol_count = 0;
       m_max_spread_points = 0;
       m_minimum_market_score = 0;
+      m_minimum_confidence = 0;
+      m_minimum_ema_gap_atr = 0.0;
+      m_minimum_directional_di_gap = 0.0;
    }
 
    bool Init(CMarketDataManager &market_data,
              const int max_spread_points,
              const int minimum_market_score,
+             const int minimum_confidence,
+             const double minimum_ema_gap_atr,
+             const double minimum_directional_di_gap,
              CLogger &logger)
    {
       m_symbol_count = market_data.SymbolCount();
       m_max_spread_points = max_spread_points;
       m_minimum_market_score = minimum_market_score;
+      m_minimum_confidence = minimum_confidence;
+      m_minimum_ema_gap_atr = minimum_ema_gap_atr;
+      m_minimum_directional_di_gap = minimum_directional_di_gap;
 
       ArrayResize(m_symbols, m_symbol_count);
       ArrayResize(m_decisions, m_symbol_count);
@@ -820,48 +704,64 @@ public:
       if(index < 0)
          return DECISION_NO_TRADE;
 
-      const bool bullish = indicator_engine.TrendIsBullish(symbol);
-      const bool bearish = indicator_engine.TrendIsBearish(symbol);
-      const bool strong_adx = indicator_engine.TrendStrengthStrong(symbol);
-      const bool healthy_atr = !scanner.IsHighVolatility(symbol) && indicator_engine.GetATR(symbol) > 0.0;
-      const bool high_volume = indicator_engine.VolumeIsHigh(symbol);
+      const int confirmed_shift = 1;
+      const double fast_ema = indicator_engine.GetFastEMA(symbol, confirmed_shift);
+      const double slow_ema = indicator_engine.GetSlowEMA(symbol, confirmed_shift);
+      const double atr = indicator_engine.GetATR(symbol, confirmed_shift);
+      const double plus_di = indicator_engine.GetPlusDI(symbol, confirmed_shift);
+      const double minus_di = indicator_engine.GetMinusDI(symbol, confirmed_shift);
+      const bool data_available = fast_ema > 0.0 && slow_ema > 0.0 && atr > 0.0;
+      const bool bullish = data_available && indicator_engine.TrendIsBullish(symbol, confirmed_shift);
+      const bool bearish = data_available && indicator_engine.TrendIsBearish(symbol, confirmed_shift);
+      const bool strong_adx = data_available && indicator_engine.TrendStrengthStrong(symbol, confirmed_shift);
+      const bool healthy_atr = data_available && !indicator_engine.MarketIsVolatile(symbol, confirmed_shift);
+      const bool ema_gap_ok = data_available && MathAbs(fast_ema - slow_ema) / atr >= m_minimum_ema_gap_atr;
+      const bool directional_di_gap_ok = data_available && MathAbs(plus_di - minus_di) >= m_minimum_directional_di_gap;
+      const bool high_volume = indicator_engine.VolumeIsHigh(symbol, confirmed_shift);
       const bool acceptable_volume = scanner.IsTickVolumeQualityAcceptable(symbol);
       const bool acceptable_spread = scanner.IsSpreadQualityAcceptable(symbol);
       const bool market_score_ok = scanner.GetMarketScore(symbol) >= m_minimum_market_score;
       const bool tradable_market = scanner.IsMarketTradable(symbol);
 
       string reason = "";
+      AddReason(reason, data_available ? "Closed-bar data confirmed" : "Insufficient closed-bar data");
       if(bullish)
-         AddReason(reason, "Strong bullish EMA alignment");
+         AddReason(reason, "Bullish EMA/DI alignment");
       else if(bearish)
-         AddReason(reason, "Strong bearish trend");
+         AddReason(reason, "Bearish EMA/DI alignment");
       else
          AddReason(reason, "Weak trend");
 
       AddReason(reason, strong_adx ? "ADX above threshold" : "ADX below threshold");
       AddReason(reason, healthy_atr ? "Healthy ATR" : "Unhealthy ATR volatility");
+      AddReason(reason, ema_gap_ok ? "EMA separation confirmed" : "EMA separation too narrow");
+      AddReason(reason, directional_di_gap_ok ? "DI separation confirmed" : "DI separation too narrow");
       AddReason(reason, high_volume ? "High volume" : (acceptable_volume ? "Acceptable volume" : "Low volume"));
       AddReason(reason, acceptable_spread ? "Spread acceptable" : "High spread");
       AddReason(reason, market_score_ok ? "Market quality score acceptable" : "Low market score");
 
       double confidence = 0.0;
       if(bullish || bearish)
-         confidence += 25.0;
+         confidence += 20.0;
       if(strong_adx)
          confidence += 20.0;
       if(healthy_atr)
          confidence += 15.0;
-      if(high_volume)
+      if(ema_gap_ok)
          confidence += 15.0;
-      else if(acceptable_volume)
-         confidence += 8.0;
-      if(acceptable_spread)
+      if(directional_di_gap_ok)
          confidence += 10.0;
+      if(high_volume)
+         confidence += 10.0;
+      else if(acceptable_volume)
+         confidence += 5.0;
+      if(acceptable_spread)
+         confidence += 5.0;
       if(market_score_ok)
-         confidence += 15.0;
+         confidence += 5.0;
 
       DecisionType decision = DECISION_NO_TRADE;
-      if(tradable_market && strong_adx && healthy_atr && acceptable_spread && acceptable_volume)
+      if(data_available && tradable_market && strong_adx && healthy_atr && ema_gap_ok && directional_di_gap_ok && acceptable_spread && acceptable_volume && confidence >= m_minimum_confidence)
       {
          if(bullish)
             decision = DECISION_BUY;
@@ -870,7 +770,7 @@ public:
       }
 
       if(decision == DECISION_NO_TRADE)
-         confidence = MathMin(confidence, 59.0);
+         confidence = MathMin(confidence, (double)(m_minimum_confidence - 1));
 
       m_decisions[index] = decision;
       m_confidence[index] = ClampConfidence(confidence);
@@ -1057,7 +957,7 @@ public:
          return;
 
       string primary_symbol = market_data.SymbolAt(0);
-      string text = "ApexScalperPro Version 0.4\n";
+      string text = "ApexScalperPro Version 0.5\n";
       text += StringFormat("Trading: %s\n", trade_engine.TradingEnabled() ? "enabled" : "disabled");
       text += StringFormat("Symbols: %d\n", market_data.SymbolCount());
       text += StringFormat("Timeframe: %s\n", EnumToString(InpTimeframe));
@@ -1097,7 +997,13 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 0.4.");
+   g_logger.Info("Initializing ApexScalperPro Version 0.5.");
+
+   if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0)
+   {
+      g_logger.Error("Invalid Decision Engine inputs. Confidence must be 1..100 and separation thresholds cannot be negative.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
 
    if(!g_market_data.Init(InpSymbols, _Symbol, g_logger))
       return INIT_FAILED;
@@ -1112,7 +1018,8 @@ int OnInit()
                              InpStrongADXLevel, InpRangingADXLevel, InpVolatilityATRPoints, InpHighVolumeMultiplier, g_logger))
       return INIT_FAILED;
 
-   if(!g_decision_engine.Init(g_market_data, InpMaxSpreadPoints, InpMinimumMarketScore, g_logger))
+   if(!g_decision_engine.Init(g_market_data, InpMaxSpreadPoints, InpMinimumMarketScore,
+                              InpMinimumDecisionConfidence, InpMinimumEMAGapATR, InpMinimumDirectionalDIGap, g_logger))
       return INIT_FAILED;
 
    g_trade_engine.Init(InpMagicNumber, InpDeviationPoints, InpEnableTrading);
