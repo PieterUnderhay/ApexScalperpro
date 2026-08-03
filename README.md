@@ -17,3 +17,7 @@ The Phase 2 branch adds two independently configurable entry-quality controls: c
 ### Strategy Tester execution
 
 To permit orders in MT5 Strategy Tester, set both `InpEnableTrading=true` and `InpEnableStrategyTesterTrading=true`. The Trade Engine additionally checks `MQL_TESTER`, so live execution remains blocked. New positions use configurable ATR stop-loss and take-profit distances; the Trade Manager can apply break-even and ATR trailing protection. Optimise these controls with fixed test data and realistic spread/commission assumptions.
+
+### Phase 3 intelligent decision controls
+
+Phase 3 adds configurable market-structure, support/resistance, and higher-timeframe confirmation gates. The Decision Engine requires the selected structure to agree with direction, rejects entries too close to opposing swing-derived levels, and can require M5 confirmation for an M1 strategy. The dashboard exposes structure and level-distance telemetry for diagnosis in Strategy Tester.
