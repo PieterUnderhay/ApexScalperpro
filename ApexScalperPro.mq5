@@ -18,6 +18,7 @@ input double InpFixedLot                = 0.10;        // Fixed lot size for Ver
 input int    InpMaxSpreadPoints         = 30;          // Maximum allowed spread in points
 input int    InpDeviationPoints         = 10;          // Maximum trade deviation in points
 input bool   InpEnableTrading           = false;       // Master trading switch
+input bool   InpEnableStrategyTesterTrading = false;   // Permit entries only when running in MT5 Strategy Tester
 input bool   InpEnableDashboard         = true;        // Show dashboard
 input bool   InpEnableLogging           = true;        // Print runtime logs
 input string InpLogPrefix               = "ApexScalperPro"; // Log prefix
@@ -46,6 +47,14 @@ input bool   InpUseCandleConfirmation       = true;       // Require confirmed c
 input double InpMinimumCandleBodyATR        = 0.10;       // Minimum closed candle body as fraction of ATR
 input bool   InpUseDecisionCooldown          = true;       // Suppress closely clustered qualified signals
 input int    InpDecisionCooldownSeconds      = 300;        // Per-symbol qualified-signal cooldown; 0 disables
+input double InpStopLossATRMultiplier        = 1.20;       // Initial stop loss distance in ATR multiples
+input double InpTakeProfitATRMultiplier      = 1.80;       // Initial take profit distance in ATR multiples
+input bool   InpEnableBreakEven              = true;       // Move profitable positions to break-even
+input double InpBreakEvenTriggerATR          = 1.00;       // Profit required before break-even, in ATR multiples
+input int    InpBreakEvenOffsetPoints        = 2;          // Protective break-even offset in points
+input bool   InpEnableATRTrailing            = true;       // Apply ATR-based trailing stop
+input double InpTrailingStartATR             = 1.50;       // Profit required before trailing, in ATR multiples
+input double InpTrailingDistanceATR          = 1.00;       // Trailing distance in ATR multiples
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -99,7 +108,7 @@ public:
          logger.Error("Invalid session hour inputs.");
          return false;
       }
-      if(InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0 || InpMaxManagedPositions < 1 || InpFixedLot <= 0.0)
+      if(InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0 || InpMaxManagedPositions < 1 || InpFixedLot <= 0.0 || InpStopLossATRMultiplier <= 0.0 || InpTakeProfitATRMultiplier <= 0.0 || InpBreakEvenTriggerATR < 0.0 || InpBreakEvenOffsetPoints < 0 || InpTrailingStartATR < 0.0 || InpTrailingDistanceATR <= 0.0)
       {
          logger.Error("Invalid risk, money-management, or position inputs.");
          return false;
@@ -524,234 +533,7 @@ public:
    bool ClosedCandleConfirmsBearish(const string symbol, const double minimum_body_atr)
    {
       MqlRates bar[];
-      if(CopyRates(symbol, m_timeframe, 1, 1, bar) != 1)
-         return false;
-      const double atr = GetATR(symbol, 1);
-      return atr > 0.0 && bar[0].close < bar[0].open && MathAbs(bar[0].close - bar[0].open) / atr >= minimum_body_atr;
-   }
-};
-
-
-//+------------------------------------------------------------------+
-//| Market scanner                                                   |
-//+------------------------------------------------------------------+
-enum ENUM_MARKET_TREND_DIRECTION
-{
-   MARKET_TREND_RANGE = 0,
-   MARKET_TREND_BULLISH = 1,
-   MARKET_TREND_BEARISH = -1
-};
-
-class CMarketScanner
-{
-private:
-   string m_symbols[];
-   int    m_scores[];
-   ENUM_MARKET_TREND_DIRECTION m_trends[];
-   double m_adx_values[];
-   double m_atr_points[];
-   int    m_spread_points[];
-   double m_volume_ratios[];
-   bool   m_tradable[];
-   bool   m_ranging[];
-   bool   m_high_volatility[];
-   int    m_symbol_count;
-   int    m_max_spread_points;
-   int    m_minimum_market_score;
-   int    m_volume_average_bars;
-   double m_strong_adx_level;
-   double m_ranging_adx_level;
-   double m_volatility_atr_points;
-   double m_high_volume_multiplier;
-
-   int FindSymbolIndex(const string symbol…4810 tokens truncated…      m_reasons[index] = reason;
-
-      if(decision != DECISION_NO_TRADE)
-         frequency_manager.RecordQualifiedSignal(symbol, TimeCurrent());
-
-      logger.Info(StringFormat("%s decision: %s Confidence: %.0f%% Reason: %s", symbol, DecisionToText(decision), m_confidence[index], m_reasons[index]));
-
-      return decision;
-   }
-
-   DecisionType EvaluateDecision(const string symbol)
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 ? m_decisions[index] : DECISION_NO_TRADE;
-   }
-
-   bool ShouldBuy(const string symbol)
-   {
-      return EvaluateDecision(symbol) == DECISION_BUY;
-   }
-
-   bool ShouldSell(const string symbol)
-   {
-      return EvaluateDecision(symbol) == DECISION_SELL;
-   }
-
-   bool ShouldTrade(const string symbol)
-   {
-      const DecisionType decision = EvaluateDecision(symbol);
-      return decision == DECISION_BUY || decision == DECISION_SELL;
-   }
-
-   double DecisionConfidence(const string symbol)
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 ? m_confidence[index] : 0.0;
-   }
-
-   string DecisionReason(const string symbol)
-   {
-      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
-      return index >= 0 ? m_reasons[index] : "Decision unavailable";
-   }
-
-   string DecisionText(const string symbol)
-   {
-      return DecisionToText(EvaluateDecision(symbol));
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Money management                                                 |
-//+------------------------------------------------------------------+
-class CMoneyManagement
-{
-private:
-   bool   m_use_dynamic_lot;
-   double m_risk_percent;
-   int    m_reference_stop_points;
-   double m_fixed_lot;
-
-public:
-   void Init(const bool use_dynamic_lot, const double risk_percent, const int reference_stop_points, const double fixed_lot)
-   {
-      m_use_dynamic_lot = use_dynamic_lot;
-      m_risk_percent = risk_percent;
-      m_reference_stop_points = reference_stop_points;
-      m_fixed_lot = fixed_lot;
-   }
-
-   bool DynamicSizingEnabled()
-   {
-      return m_use_dynamic_lot;
-   }
-
-   double CalculateLot(const string symbol, const int stop_points)
-   {
-      if(!m_use_dynamic_lot)
-         return m_fixed_lot;
-
-      const int effective_stop = stop_points > 0 ? stop_points : m_reference_stop_points;
-      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-      const double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-      const double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-      const double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      if(effective_stop <= 0 || point <= 0.0 || tick_size <= 0.0 || tick_value <= 0.0 || equity <= 0.0)
-         return 0.0;
-
-      const double risk_cash = equity * m_risk_percent / 100.0;
-      const double loss_per_lot = effective_stop * point / tick_size * tick_value;
-      if(risk_cash <= 0.0 || loss_per_lot <= 0.0)
-         return 0.0;
-
-      const double min_lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-      const double max_lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-      const double lot_step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-      double lot = MathMax(min_lot, MathMin(max_lot, risk_cash / loss_per_lot));
-      if(lot_step > 0.0)
-         lot = MathFloor(lot / lot_step) * lot_step;
-      return NormalizeDouble(lot, 2);
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Risk manager                                                      |
-//+------------------------------------------------------------------+
-class CRiskManager
-{
-private:
-   int    m_max_spread_points;
-   double m_fixed_lot;
-
-public:
-   void Init(const int max_spread_points, const double fixed_lot)
-   {
-      m_max_spread_points = max_spread_points;
-      m_fixed_lot         = fixed_lot;
-   }
-
-   bool IsSpreadAllowed(const string symbol, const int spread_points, CLogger &logger)
-   {
-      if(spread_points > m_max_spread_points)
-      {
-         logger.Warn(StringFormat("%s spread blocked: %d points exceeds limit %d.", symbol, spread_points, m_max_spread_points));
-         return false;
-      }
-
-      return true;
-   }
-
-   double NormalizeLot(const string symbol, const double requested_lot)
-   {
-      const double min_lot  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-      const double max_lot  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-      const double lot_step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-
-      double lot = MathMax(min_lot, MathMin(max_lot, requested_lot));
-      if(lot_step > 0.0)
-         lot = MathFloor(lot / lot_step) * lot_step;
-
-      return NormalizeDouble(lot, 2);
-   }
-
-   double LotSize(const string symbol)
-   {
-      return NormalizeLot(symbol, m_fixed_lot);
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Position manager                                                 |
-//+------------------------------------------------------------------+
-class CPositionManager
-{
-private:
-   ulong m_magic_number;
-   int   m_max_positions;
-
-public:
-   void Init(const ulong magic_number, const int max_positions)
-   {
-      m_magic_number = magic_number;
-      m_max_positions = max_positions;
-   }
-
-   int ManagedPositionCount(const string symbol)
-   {
-      int count = 0;
-      for(int index = 0; index < PositionsTotal(); index++)
-      {
-         const ulong ticket = PositionGetTicket(index);
-         if(ticket == 0 || !PositionSelectByTicket(ticket))
-            continue;
-         if(PositionGetString(POSITION_SYMBOL) == symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == m_magic_number)
-            count++;
-      }
-      return count;
-   }
-
-   bool HasDirection(const string symbol, const ENUM_POSITION_TYPE direction)
-   {
-      for(int index = 0; index < PositionsTotal(); index++)
-      {
-         const ulong ticket = PositionGetTicket(index);
-         if(ticket == 0 || !PositionSelectByTicket(ticket))
-            continue;
-         if(PositionGetString(POSITION_SYMBOL) == symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == m_magic_number && (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == direction)
-            return true;
+      if(CopyRates(symbol, m_timeframe, 1, 1, bar) !=…6666 tokens truncated…rn true;
       }
       return false;
    }
@@ -796,13 +578,15 @@ private:
    ulong  m_magic_number;
    int    m_deviation_points;
    bool   m_enabled;
+   bool   m_tester_only;
 
 public:
-   void Init(const ulong magic_number, const int deviation_points, const bool enabled)
+   void Init(const ulong magic_number, const int deviation_points, const bool enabled, const bool tester_only)
    {
       m_magic_number     = magic_number;
       m_deviation_points = deviation_points;
       m_enabled          = enabled;
+      m_tester_only      = tester_only;
 
       m_trade.SetExpertMagicNumber(m_magic_number);
       m_trade.SetDeviationInPoints(m_deviation_points);
@@ -811,48 +595,141 @@ public:
 
    bool TradingEnabled()
    {
-      return m_enabled;
+      return m_enabled && (!m_tester_only || (bool)MQLInfoInteger(MQL_TESTER));
    }
 
-   // Version 0.1 intentionally exposes execution plumbing only; strategy entries arrive in later milestones.
-   bool Buy(const string symbol, const double lot, const string comment, CLogger &logger)
+   bool Buy(const string symbol, const double lot, const double stop_loss, const double take_profit, const string comment, CLogger &logger)
    {
-      if(!m_enabled)
+      if(!TradingEnabled())
       {
-         logger.Info("Buy request ignored because trading is disabled.");
+         logger.Info("Buy request ignored because Strategy Tester trading is disabled.");
          return false;
       }
 
       m_trade.SetTypeFillingBySymbol(symbol);
       ResetLastError();
-      if(!m_trade.Buy(lot, symbol, 0.0, 0.0, 0.0, comment))
+      if(!m_trade.Buy(lot, symbol, 0.0, stop_loss, take_profit, comment))
       {
          logger.Error(StringFormat("Buy failed for %s. Retcode=%u LastError=%d", symbol, m_trade.ResultRetcode(), GetLastError()));
          return false;
       }
 
-      logger.Info(StringFormat("Buy placed for %s, lot %.2f.", symbol, lot));
+      logger.Info(StringFormat("Buy placed for %s, lot %.2f, SL %.5f, TP %.5f.", symbol, lot, stop_loss, take_profit));
       return true;
    }
 
-   bool Sell(const string symbol, const double lot, const string comment, CLogger &logger)
+   bool Sell(const string symbol, const double lot, const double stop_loss, const double take_profit, const string comment, CLogger &logger)
    {
-      if(!m_enabled)
+      if(!TradingEnabled())
       {
-         logger.Info("Sell request ignored because trading is disabled.");
+         logger.Info("Sell request ignored because Strategy Tester trading is disabled.");
          return false;
       }
 
       m_trade.SetTypeFillingBySymbol(symbol);
       ResetLastError();
-      if(!m_trade.Sell(lot, symbol, 0.0, 0.0, 0.0, comment))
+      if(!m_trade.Sell(lot, symbol, 0.0, stop_loss, take_profit, comment))
       {
          logger.Error(StringFormat("Sell failed for %s. Retcode=%u LastError=%d", symbol, m_trade.ResultRetcode(), GetLastError()));
          return false;
       }
 
-      logger.Info(StringFormat("Sell placed for %s, lot %.2f.", symbol, lot));
+      logger.Info(StringFormat("Sell placed for %s, lot %.2f, SL %.5f, TP %.5f.", symbol, lot, stop_loss, take_profit));
       return true;
+   }
+
+   bool ModifyPosition(const ulong ticket, const double stop_loss, const double take_profit, CLogger &logger)
+   {
+      if(!TradingEnabled())
+         return false;
+      ResetLastError();
+      if(!m_trade.PositionModify(ticket, stop_loss, take_profit))
+      {
+         logger.Error(StringFormat("Position modification failed for %I64u. Retcode=%u LastError=%d", ticket, m_trade.ResultRetcode(), GetLastError()));
+         return false;
+      }
+      return true;
+   }
+};
+
+//+------------------------------------------------------------------+
+//| Trade manager                                                     |
+//+------------------------------------------------------------------+
+class CTradeManager
+{
+private:
+   ulong  m_magic_number;
+   bool   m_break_even_enabled;
+   double m_break_even_trigger_atr;
+   int    m_break_even_offset_points;
+   bool   m_trailing_enabled;
+   double m_trailing_start_atr;
+   double m_trailing_distance_atr;
+
+public:
+   void Init(const ulong magic_number, const bool break_even_enabled, const double break_even_trigger_atr, const int break_even_offset_points,
+             const bool trailing_enabled, const double trailing_start_atr, const double trailing_distance_atr)
+   {
+      m_magic_number = magic_number;
+      m_break_even_enabled = break_even_enabled;
+      m_break_even_trigger_atr = break_even_trigger_atr;
+      m_break_even_offset_points = break_even_offset_points;
+      m_trailing_enabled = trailing_enabled;
+      m_trailing_start_atr = trailing_start_atr;
+      m_trailing_distance_atr = trailing_distance_atr;
+   }
+
+   void Manage(const string symbol, CIndicatorEngine &indicator_engine, CTradeEngine &trade_engine, CLogger &logger)
+   {
+      if(!trade_engine.TradingEnabled())
+         return;
+
+      const double atr = indicator_engine.GetATR(symbol, 0);
+      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      const int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      const int stops_level = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+      MqlTick tick;
+      if(atr <= 0.0 || point <= 0.0 || !SymbolInfoTick(symbol, tick))
+         return;
+
+      for(int index = PositionsTotal() - 1; index >= 0; index--)
+      {
+         const ulong ticket = PositionGetTicket(index);
+         if(ticket == 0 || !PositionSelectByTicket(ticket))
+            continue;
+         if(PositionGetString(POSITION_SYMBOL) != symbol || (ulong)PositionGetInteger(POSITION_MAGIC) != m_magic_number)
+            continue;
+
+         const ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         const double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
+         const double current_sl = PositionGetDouble(POSITION_SL);
+         const double take_profit = PositionGetDouble(POSITION_TP);
+         const double market_price = type == POSITION_TYPE_BUY ? tick.bid : tick.ask;
+         const double profit_distance = type == POSITION_TYPE_BUY ? market_price - open_price : open_price - market_price;
+         double proposed_sl = current_sl;
+
+         if(m_break_even_enabled && profit_distance >= atr * m_break_even_trigger_atr)
+         {
+            const double break_even = type == POSITION_TYPE_BUY ? open_price + m_break_even_offset_points * point : open_price - m_break_even_offset_points * point;
+            if((type == POSITION_TYPE_BUY && (proposed_sl == 0.0 || break_even > proposed_sl)) || (type == POSITION_TYPE_SELL && (proposed_sl == 0.0 || break_even < proposed_sl)))
+               proposed_sl = break_even;
+         }
+
+         if(m_trailing_enabled && profit_distance >= atr * m_trailing_start_atr)
+         {
+            const double trailing_sl = type == POSITION_TYPE_BUY ? market_price - atr * m_trailing_distance_atr : market_price + atr * m_trailing_distance_atr;
+            if((type == POSITION_TYPE_BUY && (proposed_sl == 0.0 || trailing_sl > proposed_sl)) || (type == POSITION_TYPE_SELL && (proposed_sl == 0.0 || trailing_sl < proposed_sl)))
+               proposed_sl = trailing_sl;
+         }
+
+         if(proposed_sl == current_sl || proposed_sl == 0.0)
+            continue;
+         if(type == POSITION_TYPE_BUY && proposed_sl >= tick.bid - stops_level * point)
+            continue;
+         if(type == POSITION_TYPE_SELL && proposed_sl <= tick.ask + stops_level * point)
+            continue;
+         trade_engine.ModifyPosition(ticket, NormalizeDouble(proposed_sl, digits), take_profit, logger);
+      }
    }
 };
 
@@ -913,7 +790,7 @@ public:
          return;
 
       string primary_symbol = market_data.SymbolAt(0);
-      string text = "ApexScalperPro Version 0.5\n";
+      string text = "ApexScalperPro Phase 2\n";
       text += StringFormat("Trading: %s\n", trade_engine.TradingEnabled() ? "enabled" : "disabled");
       text += StringFormat("Symbols: %d\n", market_data.SymbolCount());
       text += StringFormat("Timeframe: %s\n", EnumToString(InpTimeframe));
@@ -947,6 +824,7 @@ CMoneyManagement   g_money_management;
 CPositionManager   g_position_manager;
 CHedgingManager    g_hedging_manager;
 CTradeEngine       g_trade_engine;
+CTradeManager      g_trade_manager;
 CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
 CSessionFilter     g_session_filter;
@@ -989,7 +867,9 @@ int OnInit()
                               InpUseCandleConfirmation, InpMinimumCandleBodyATR, g_logger))
       return INIT_FAILED;
 
-   g_trade_engine.Init(InpMagicNumber, InpDeviationPoints, InpEnableTrading);
+   g_trade_engine.Init(InpMagicNumber, InpDeviationPoints, InpEnableTrading, InpEnableStrategyTesterTrading);
+   g_trade_manager.Init(InpMagicNumber, InpEnableBreakEven, InpBreakEvenTriggerATR, InpBreakEvenOffsetPoints,
+                        InpEnableATRTrailing, InpTrailingStartATR, InpTrailingDistanceATR);
    g_statistics.Reset();
    g_dashboard.Init(InpEnableDashboard);
    g_market_scanner.Scan(g_market_data, g_indicator_engine, g_logger);
@@ -1016,6 +896,7 @@ void OnTick()
       if(!g_market_data.RefreshSymbol(symbol, tick, g_logger))
          continue;
 
+      g_trade_manager.Manage(symbol, g_indicator_engine, g_trade_engine, g_logger);
       g_market_scanner.ScanSymbol(symbol, g_market_data, g_indicator_engine, g_logger);
       g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_frequency_manager, g_logger));
 
@@ -1025,16 +906,33 @@ void OnTick()
       if(!g_market_scanner.IsMarketTradable(symbol))
          continue;
 
-      // Version 0.4 evaluates decisions only; trade execution remains disabled until a later milestone.
       if(!g_decision_engine.ShouldTrade(symbol))
          continue;
       const DecisionType decision = g_decision_engine.EvaluateDecision(symbol);
-      if(!g_position_manager.CanOpenPosition(symbol) || !g_hedging_manager.CanOpenDirection(symbol, decision, g_position_manager))
+      const ENUM_POSITION_TYPE direction = decision == DECISION_BUY ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      if(g_position_manager.HasDirection(symbol, direction) || !g_position_manager.CanOpenPosition(symbol) || !g_hedging_manager.CanOpenDirection(symbol, decision, g_position_manager))
          continue;
 
-      const double lot = g_risk_manager.NormalizeLot(symbol, g_money_management.CalculateLot(symbol, InpReferenceStopPoints));
+      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      const int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      const int stops_level = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+      const double atr = g_indicator_engine.GetATR(symbol, 1);
+      if(point <= 0.0 || atr <= 0.0)
+         continue;
+      const double stop_distance = MathMax(atr * InpStopLossATRMultiplier, (stops_level + 1) * point);
+      const double take_profit_distance = MathMax(atr * InpTakeProfitATRMultiplier, (stops_level + 1) * point);
+      const int stop_points = (int)MathCeil(stop_distance / point);
+      const double lot = g_risk_manager.NormalizeLot(symbol, g_money_management.CalculateLot(symbol, stop_points));
       if(lot <= 0.0)
+      {
          g_logger.Warn(StringFormat("Calculated lot size for %s is invalid: %.2f", symbol, lot));
+         continue;
+      }
+
+      if(decision == DECISION_BUY)
+         g_trade_engine.Buy(symbol, lot, NormalizeDouble(tick.ask - stop_distance, digits), NormalizeDouble(tick.ask + take_profit_distance, digits), "ApexScalperPro ST Buy", g_logger);
+      else if(decision == DECISION_SELL)
+         g_trade_engine.Sell(symbol, lot, NormalizeDouble(tick.bid + stop_distance, digits), NormalizeDouble(tick.bid - take_profit_distance, digits), "ApexScalperPro ST Sell", g_logger);
    }
 
    g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics);
