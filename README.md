@@ -21,3 +21,7 @@ To permit orders in MT5 Strategy Tester, set both `InpEnableTrading=true` and `I
 ### Phase 3 intelligent decision controls
 
 Phase 3 adds configurable market-structure, support/resistance, and higher-timeframe confirmation gates. The Decision Engine requires the selected structure to agree with direction, rejects entries too close to opposing swing-derived levels, and can require M5 confirmation for an M1 strategy. The dashboard exposes structure and level-distance telemetry for diagnosis in Strategy Tester.
+
+### Phase 4 telemetry
+
+Phase 4 logs qualified trade candidates, including confidence and all active filter reasons, and records close reasons and net results from MT5 deal history. Dashboard statistics include signals, rejections, executed trades, wins/losses, average R, and consecutive win/loss streaks to support repeatable optimisation comparisons.
