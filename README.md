@@ -1,3 +1,3 @@
 # ApexScalperpro
 
-Version 0.6 retains the Version 0.5 Decision Engine framework and adds a reusable server-time session filter. Confirmed signal filters, confidence scoring, and session eligibility are reported through decision telemetry. Trading remains disabled; the EA only displays decision telemetry on the dashboard.
+Version 0.7 adds modular Money Management infrastructure: backward-compatible fixed lots remain the default, while equity-risk sizing is ready for Strategy Tester optimisation. Confirmed signal filters and session eligibility remain decision-only telemetry; live trading is disabled.
