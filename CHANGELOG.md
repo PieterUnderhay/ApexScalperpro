@@ -1,5 +1,13 @@
 # Changelog
 
+## Phase 5 - Strategy Tester Research Platform
+
+- Adds optional CSV export to `MQL5/Files` for completed Strategy Tester trades, including entry/exit history, position sizing, SL/TP, duration, P/L, R multiple, and entry/exit reasons.
+- Adds an end-of-test logged backtest summary covering net and gross P/L, profit factor, maximum drawdown, win rate, and average R.
+- Preserves existing trade behavior; research export is disabled outside Strategy Tester.
+- Adds configurable export enablement and filename inputs.
+- Compiles with 0 errors and 0 warnings.
+
 ## Phase 4 - Optimisation and Trade Telemetry
 
 - Logs each qualified trade candidate with direction, confidence, and active decision-filter reasons.
