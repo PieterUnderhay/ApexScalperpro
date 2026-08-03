@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 0.6 - Session-aware decision control
+
+- Adds a reusable server-time session filter, including overnight-session support and input validation.
+- Decision telemetry now rejects otherwise qualified setups outside the configured session and records the session reason.
+- Default decision session is 07:00-20:00 server time; disable the filter for 24-hour optimisation runs.
+
 ## Version 0.5 - Decision Engine confirmation
 
 - Evaluates directional, ADX, ATR, and volume signals from the last completed bar rather than the forming bar, reducing intrabar signal flicker in Strategy Tester.
