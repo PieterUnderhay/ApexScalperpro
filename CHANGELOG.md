@@ -1,5 +1,14 @@
 # Changelog
 
+## Phase 4 - Optimisation and Trade Telemetry
+
+- Logs each qualified trade candidate with direction, confidence, and active decision-filter reasons.
+- Logs magic-number-isolated close transactions with net profit and broker deal reason.
+- Adds performance counters for signals, rejected signals, executed trades, wins, losses, average R multiple, and maximum consecutive win/loss streaks.
+- Tracks entry risk by position ID so closed-trade R multiples use the planned cash risk.
+- Dashboard summary now exposes the new counters for Strategy Tester analysis.
+- Compiles with 0 errors and 0 warnings.
+
 ## Phase 3 - Intelligent Decision Engine
 
 - Adds Market Structure analysis for higher highs/lows, lower highs/lows, break of structure, and change of character states.
