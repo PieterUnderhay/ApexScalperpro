@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 0.9|
+//|                      Professional MT5 Expert Advisor - Version 1.0|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "0.900"
-#property description "ApexScalperPro Version 0.9 - Decision Statistics"
+#property version   "1.000"
+#property description "ApexScalperPro Version 1.0 - Strategy Tester Ready"
 
 #include <Trade/Trade.mqh>
 
@@ -74,6 +74,38 @@ public:
    void Error(const string message)
    {
       PrintFormat("[%s][ERROR] %s", m_prefix, message);
+   }
+};
+
+//+------------------------------------------------------------------+
+//| Configuration                                                     |
+//+------------------------------------------------------------------+
+class CConfiguration
+{
+public:
+   bool Validate(CLogger &logger)
+   {
+      if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0)
+      {
+         logger.Error("Invalid Decision Engine inputs.");
+         return false;
+      }
+      if(InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23)
+      {
+         logger.Error("Invalid session hour inputs.");
+         return false;
+      }
+      if(InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0 || InpMaxManagedPositions < 1 || InpFixedLot <= 0.0)
+      {
+         logger.Error("Invalid risk, money-management, or position inputs.");
+         return false;
+      }
+      if(InpFastEMAPeriod <= 0 || InpSlowEMAPeriod <= InpFastEMAPeriod || InpATRPeriod <= 0 || InpADXPeriod <= 0 || InpVolumeAverageBars <= 0 || InpMaxSpreadPoints < 0)
+      {
+         logger.Error("Invalid market or indicator inputs.");
+         return false;
+      }
+      return true;
    }
 };
 
@@ -560,38 +592,22 @@ public:
              const int max_spread_points,
              const int minimum_market_score,
              const int volume_average_bars,
-             const double strong_adx_level,
-             const double ranging_adx_level,
-             const double volatility_atr_points,
-             const double high_volume_multiplier,
-             CLogger &logger)
-   {
-      m_symbol_count = market_data.SymbolCount();
-      m_max_spread_points = max_spread_points;
-      m_minimum_market_score = minimum_market_score;
-      m_volume_average_bars = volume_average_bars;
-      m_strong_adx_level = strong_adx_level;
-      m_ranging_adx_level = ranging_adx_level;
-      m_volatility_atr_points = volatility_atr_points;
-      m_high_volume_multiplier = high_volume_multiplier;
-
-      ArrayResize(m_symbols, m_symbol_count);
-      ArrayResize(m_scores, m_symbol_count);
-      ArrayResize(m_trends, m_symbol_count);
-      ArrayResize(m_adx_values, m_symbol_count);
-      ArrayResize(m_atr_points, m_symbol_count);
-      ArrayResize(m_spread_points, m_symbol_count);
-      ArrayResize(m_volume_ratios, m_symbol_count);
-      ArrayResize(m_tradable, m_symbol_count);
-      ArrayResize(m_ranging, m_symbol_count);
-      ArrayResize(m_high_volatility, m_symbol_count);
-
-      for(int index = 0; index < m_symbol_count; index++)
+             const double strong_…3737 tokens truncated…= m_minimum_confidence)
       {
-         m_symbols[index] = market_data.SymbolAt(index);
-         m_scores[index] = 0;
-         m_trends[index] = MARKET_TREND_RANGE;
-         m_adx_values[inde…3514 tokens truncated…   logger.Info(StringFormat("%s decision: %s Confidence: %.0f%% Reason: %s", symbol, DecisionToText(decision), m_confidence[index], m_reasons[index]));
+         if(bullish)
+            decision = DECISION_BUY;
+         else if(bearish)
+            decision = DECISION_SELL;
+      }
+
+      if(decision == DECISION_NO_TRADE)
+         confidence = MathMin(confidence, (double)(m_minimum_confidence - 1));
+
+      m_decisions[index] = decision;
+      m_confidence[index] = ClampConfidence(confidence);
+      m_reasons[index] = reason;
+
+      logger.Info(StringFormat("%s decision: %s Confidence: %.0f%% Reason: %s", symbol, DecisionToText(decision), m_confidence[index], m_reasons[index]));
 
       return decision;
    }
@@ -962,6 +978,7 @@ public:
 //| Global module instances                                          |
 //+------------------------------------------------------------------+
 CLogger            g_logger;
+CConfiguration     g_configuration;
 CMarketDataManager g_market_data;
 CRiskManager       g_risk_manager;
 CMoneyManagement   g_money_management;
@@ -981,13 +998,10 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 0.9.");
+   g_logger.Info("Initializing ApexScalperPro Version 1.0.");
 
-   if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0 || InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23 || InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0 || InpMaxManagedPositions < 1)
-   {
-      g_logger.Error("Invalid inputs. Check Decision Engine, session, and money-management parameters.");
+   if(!g_configuration.Validate(g_logger))
       return INIT_PARAMETERS_INCORRECT;
-   }
 
    if(!g_market_data.Init(InpSymbols, _Symbol, g_logger))
       return INIT_FAILED;
