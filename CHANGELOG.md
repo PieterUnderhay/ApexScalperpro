@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 0.8 - Position and Hedging infrastructure
+
+- Adds read-only Position Manager and Hedging Manager modules scoped by symbol and EA magic number.
+- Adds future position-limit and opposing-exposure guards without placing, modifying, or closing trades.
+- Adds optimisable maximum-position and hedging-permission inputs, defaulting to one position and no hedging.
+
 ## Version 0.7 - Money Management infrastructure
 
 - Adds a reusable Money Management module with fixed-lot compatibility and optional equity-risk sizing.
