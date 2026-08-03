@@ -3,8 +3,8 @@
 //|                      Professional MT5 Expert Advisor - Version 1.0|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.000"
-#property description "ApexScalperPro Version 1.0 - Strategy Tester Ready"
+#property version   "1.010"
+#property description "ApexScalperPro Phase 2 - Signal Quality Controls"
 
 #include <Trade/Trade.mqh>
 
@@ -42,6 +42,10 @@ input double InpRiskPerTradePercent        = 0.50;       // Equity risk percenta
 input int    InpReferenceStopPoints        = 100;        // Reference stop distance for risk sizing
 input int    InpMaxManagedPositions        = 1;          // Future maximum positions per symbol and magic number
 input bool   InpAllowHedging                = false;      // Future permission for opposite-direction managed exposure
+input bool   InpUseCandleConfirmation       = true;       // Require confirmed closed candle direction
+input double InpMinimumCandleBodyATR        = 0.10;       // Minimum closed candle body as fraction of ATR
+input bool   InpUseDecisionCooldown          = true;       // Suppress closely clustered qualified signals
+input int    InpDecisionCooldownSeconds      = 300;        // Per-symbol qualified-signal cooldown; 0 disables
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -85,7 +89,7 @@ class CConfiguration
 public:
    bool Validate(CLogger &logger)
    {
-      if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0)
+      if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0 || InpMinimumCandleBodyATR < 0.0 || InpDecisionCooldownSeconds < 0)
       {
          logger.Error("Invalid Decision Engine inputs.");
          return false;
@@ -507,6 +511,24 @@ public:
       const double average_volume = GetAverageVolume(m_volume_average_bars, symbol);
       return average_volume > 0.0 && (double)current_volume >= average_volume * m_high_volume_multiplier;
    }
+
+   bool ClosedCandleConfirmsBullish(const string symbol, const double minimum_body_atr)
+   {
+      MqlRates bar[];
+      if(CopyRates(symbol, m_timeframe, 1, 1, bar) != 1)
+         return false;
+      const double atr = GetATR(symbol, 1);
+      return atr > 0.0 && bar[0].close > bar[0].open && MathAbs(bar[0].close - bar[0].open) / atr >= minimum_body_atr;
+   }
+
+   bool ClosedCandleConfirmsBearish(const string symbol, const double minimum_body_atr)
+   {
+      MqlRates bar[];
+      if(CopyRates(symbol, m_timeframe, 1, 1, bar) != 1)
+         return false;
+      const double atr = GetATR(symbol, 1);
+      return atr > 0.0 && bar[0].close < bar[0].open && MathAbs(bar[0].close - bar[0].open) / atr >= minimum_body_atr;
+   }
 };
 
 
@@ -542,70 +564,10 @@ private:
    double m_volatility_atr_points;
    double m_high_volume_multiplier;
 
-   int FindSymbolIndex(const string symbol)
-   {
-      for(int index = 0; index < m_symbol_count; index++)
-      {
-         if(m_symbols[index] == symbol)
-            return index;
-      }
+   int FindSymbolIndex(const string symbol…4810 tokens truncated…      m_reasons[index] = reason;
 
-      return -1;
-   }
-
-   int ClampScore(const double value)
-   {
-      return (int)MathMax(0.0, MathMin(100.0, MathRound(value)));
-   }
-
-   double ComponentScore(const double value, const double target)
-   {
-      if(target <= 0.0)
-         return 0.0;
-
-      return MathMin(1.0, MathMax(0.0, value / target));
-   }
-
-   string TrendToText(const ENUM_MARKET_TREND_DIRECTION direction)
-   {
-      if(direction == MARKET_TREND_BULLISH)
-         return "Bullish";
-      if(direction == MARKET_TREND_BEARISH)
-         return "Bearish";
-      return "Range";
-   }
-
-public:
-   CMarketScanner()
-   {
-      m_symbol_count = 0;
-      m_max_spread_points = 0;
-      m_minimum_market_score = 0;
-      m_volume_average_bars = 0;
-      m_strong_adx_level = 0.0;
-      m_ranging_adx_level = 0.0;
-      m_volatility_atr_points = 0.0;
-      m_high_volume_multiplier = 0.0;
-   }
-
-   bool Init(CMarketDataManager &market_data,
-             const int max_spread_points,
-             const int minimum_market_score,
-             const int volume_average_bars,
-             const double strong_…3737 tokens truncated…= m_minimum_confidence)
-      {
-         if(bullish)
-            decision = DECISION_BUY;
-         else if(bearish)
-            decision = DECISION_SELL;
-      }
-
-      if(decision == DECISION_NO_TRADE)
-         confidence = MathMin(confidence, (double)(m_minimum_confidence - 1));
-
-      m_decisions[index] = decision;
-      m_confidence[index] = ClampConfidence(confidence);
-      m_reasons[index] = reason;
+      if(decision != DECISION_NO_TRADE)
+         frequency_manager.RecordQualifiedSignal(symbol, TimeCurrent());
 
       logger.Info(StringFormat("%s decision: %s Confidence: %.0f%% Reason: %s", symbol, DecisionToText(decision), m_confidence[index], m_reasons[index]));
 
@@ -988,6 +950,7 @@ CTradeEngine       g_trade_engine;
 CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
 CSessionFilter     g_session_filter;
+CTradeFrequencyManager g_frequency_manager;
 CDecisionEngine    g_decision_engine;
 CStatistics        g_statistics;
 CDashboard         g_dashboard;
@@ -1020,8 +983,10 @@ int OnInit()
       return INIT_FAILED;
 
    g_session_filter.Init(InpUseSessionFilter, InpSessionStartHour, InpSessionEndHour);
+   g_frequency_manager.Init(g_market_data, InpUseDecisionCooldown, InpDecisionCooldownSeconds);
    if(!g_decision_engine.Init(g_market_data, InpMaxSpreadPoints, InpMinimumMarketScore,
-                              InpMinimumDecisionConfidence, InpMinimumEMAGapATR, InpMinimumDirectionalDIGap, g_logger))
+                              InpMinimumDecisionConfidence, InpMinimumEMAGapATR, InpMinimumDirectionalDIGap,
+                              InpUseCandleConfirmation, InpMinimumCandleBodyATR, g_logger))
       return INIT_FAILED;
 
    g_trade_engine.Init(InpMagicNumber, InpDeviationPoints, InpEnableTrading);
@@ -1029,7 +994,7 @@ int OnInit()
    g_dashboard.Init(InpEnableDashboard);
    g_market_scanner.Scan(g_market_data, g_indicator_engine, g_logger);
    for(int index = 0; index < g_market_data.SymbolCount(); index++)
-      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_session_filter, g_logger));
+      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_session_filter, g_frequency_manager, g_logger));
    g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics);
 
    g_logger.Info("Initialization completed successfully.");
@@ -1052,7 +1017,7 @@ void OnTick()
          continue;
 
       g_market_scanner.ScanSymbol(symbol, g_market_data, g_indicator_engine, g_logger);
-      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_logger));
+      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_frequency_manager, g_logger));
 
       const int spread_points = g_market_data.SpreadPoints(symbol);
       if(!g_risk_manager.IsSpreadAllowed(symbol, spread_points, g_logger))
