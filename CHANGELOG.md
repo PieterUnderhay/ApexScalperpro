@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 0.9 - Decision statistics
+
+- Adds a reusable Statistics module that records BUY, SELL, and NO TRADE decision outcomes.
+- Dashboard now displays per-run decision telemetry to support Strategy Tester parameter comparison.
+- Statistics remains independent of execution and does not alter trading behaviour.
+
 ## Version 0.8 - Position and Hedging infrastructure
 
 - Adds read-only Position Manager and Hedging Manager modules scoped by symbol and EA magic number.
