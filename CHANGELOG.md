@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 0.7 - Money Management infrastructure
+
+- Adds a reusable Money Management module with fixed-lot compatibility and optional equity-risk sizing.
+- Dynamic sizing uses symbol tick value, tick size, equity, and a configurable reference stop distance.
+- Adds parameter validation for risk percentage and reference-stop inputs; dynamic sizing remains disabled by default.
+
 ## Version 0.6 - Session-aware decision control
 
 - Adds a reusable server-time session filter, including overnight-session support and input validation.
