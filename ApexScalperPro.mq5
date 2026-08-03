@@ -55,6 +55,14 @@ input int    InpBreakEvenOffsetPoints        = 2;          // Protective break-e
 input bool   InpEnableATRTrailing            = true;       // Apply ATR-based trailing stop
 input double InpTrailingStartATR             = 1.50;       // Profit required before trailing, in ATR multiples
 input double InpTrailingDistanceATR          = 1.00;       // Trailing distance in ATR multiples
+input bool   InpUseMarketStructureFilter     = true;       // Require structure agreement with decision direction
+input int    InpStructureLookbackBars        = 40;         // Closed bars used for swing analysis
+input int    InpSwingDepthBars               = 2;          // Bars on each side required to confirm a swing
+input bool   InpUseSupportResistanceFilter   = true;       // Reject entries near opposing swing level
+input int    InpMinimumSRDistancePoints      = 50;         // Minimum distance to opposing support/resistance
+input bool   InpUseMultiTimeframeConfirmation = true;      // Confirm local signal on a higher timeframe
+input ENUM_TIMEFRAMES InpConfirmationTimeframe = PERIOD_M5; // Higher confirmation timeframe
+input int    InpMinimumTrendScore            = 70;         // Minimum composite trend score
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -113,7 +121,7 @@ public:
          logger.Error("Invalid risk, money-management, or position inputs.");
          return false;
       }
-      if(InpFastEMAPeriod <= 0 || InpSlowEMAPeriod <= InpFastEMAPeriod || InpATRPeriod <= 0 || InpADXPeriod <= 0 || InpVolumeAverageBars <= 0 || InpMaxSpreadPoints < 0)
+      if(InpFastEMAPeriod <= 0 || InpSlowEMAPeriod <= InpFastEMAPeriod || InpATRPeriod <= 0 || InpADXPeriod <= 0 || InpVolumeAverageBars <= 0 || InpMaxSpreadPoints < 0 || InpStructureLookbackBars < 10 || InpSwingDepthBars < 1 || InpStructureLookbackBars <= InpSwingDepthBars * 2 + 4 || InpMinimumSRDistancePoints < 0 || InpMinimumTrendScore < 0 || InpMinimumTrendScore > 100)
       {
          logger.Error("Invalid market or indicator inputs.");
          return false;
@@ -507,65 +515,7 @@ public:
    bool MarketIsVolatile(const string symbol = "", const int shift = 0)
    {
       const string target_symbol = symbol == "" ? _Symbol : symbol;
-      const double point = SymbolInfoDouble(target_symbol, SYMBOL_POINT);
-      if(point <= 0.0)
-         return false;
-
-      return GetATR(target_symbol, shift) / point >= m_volatility_atr_points;
-   }
-
-   bool VolumeIsHigh(const string symbol = "", const int shift = 0)
-   {
-      const long current_volume = GetCurrentVolume(symbol, shift);
-      const double average_volume = GetAverageVolume(m_volume_average_bars, symbol);
-      return average_volume > 0.0 && (double)current_volume >= average_volume * m_high_volume_multiplier;
-   }
-
-   bool ClosedCandleConfirmsBullish(const string symbol, const double minimum_body_atr)
-   {
-      MqlRates bar[];
-      if(CopyRates(symbol, m_timeframe, 1, 1, bar) != 1)
-         return false;
-      const double atr = GetATR(symbol, 1);
-      return atr > 0.0 && bar[0].close > bar[0].open && MathAbs(bar[0].close - bar[0].open) / atr >= minimum_body_atr;
-   }
-
-   bool ClosedCandleConfirmsBearish(const string symbol, const double minimum_body_atr)
-   {
-      MqlRates bar[];
-      if(CopyRates(symbol, m_timeframe, 1, 1, bar) !=…6666 tokens truncated…rn true;
-      }
-      return false;
-   }
-
-   bool CanOpenPosition(const string symbol)
-   {
-      return ManagedPositionCount(symbol) < m_max_positions;
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Hedging manager                                                  |
-//+------------------------------------------------------------------+
-class CHedgingManager
-{
-private:
-   bool m_allow_hedging;
-
-public:
-   void Init(const bool allow_hedging)
-   {
-      m_allow_hedging = allow_hedging;
-   }
-
-   bool CanOpenDirection(const string symbol, const DecisionType decision, CPositionManager &position_manager)
-   {
-      if(m_allow_hedging || decision == DECISION_NO_TRADE)
-         return true;
-      if(decision == DECISION_BUY)
-         return !position_manager.HasDirection(symbol, POSITION_TYPE_SELL);
-      return !position_manager.HasDirection(symbol, POSITION_TYPE_BUY);
-   }
+      const double point = SymbolInfoDouble(…8539 tokens truncated… }
 };
 
 //+------------------------------------------------------------------+
@@ -784,7 +734,7 @@ public:
       m_enabled = enabled;
    }
 
-   void Render(CMarketDataManager &market_data, CTradeEngine &trade_engine, CMarketScanner &scanner, CDecisionEngine &decision_engine, CStatistics &statistics)
+   void Render(CMarketDataManager &market_data, CTradeEngine &trade_engine, CMarketScanner &scanner, CDecisionEngine &decision_engine, CStatistics &statistics, CMarketStructureEngine &structure_engine)
    {
       if(!m_enabled)
          return;
@@ -799,6 +749,10 @@ public:
       text += StringFormat("ADX: %.2f\n", scanner.GetADX(primary_symbol));
       text += StringFormat("Spread: %d points\n", scanner.GetSpreadPoints(primary_symbol));
       text += StringFormat("Volatility: %s\n", scanner.Volatility(primary_symbol));
+      double support=0.0,resistance=0.0; const ENUM_MARKET_STRUCTURE structure=structure_engine.Analyse(primary_symbol,InpTimeframe,support,resistance); const double point=SymbolInfoDouble(primary_symbol,SYMBOL_POINT), price=SymbolInfoDouble(primary_symbol,SYMBOL_BID);
+      text += StringFormat("Session: %02d:00-%02d:00\n",InpSessionStartHour,InpSessionEndHour);
+      text += StringFormat("Structure: %s\n",structure_engine.Text(structure));
+      text += StringFormat("Support distance: %.0f | Resistance distance: %.0f points\n",point>0.0?(price-support)/point:0.0,point>0.0?(resistance-price)/point:0.0);
       text += StringFormat("Decision: %s\n", decision_engine.DecisionText(primary_symbol));
       text += StringFormat("Confidence: %.0f%%\n", decision_engine.DecisionConfidence(primary_symbol));
       text += StringFormat("Reason: %s", decision_engine.DecisionReason(primary_symbol));
@@ -829,6 +783,8 @@ CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
 CSessionFilter     g_session_filter;
 CTradeFrequencyManager g_frequency_manager;
+CMarketStructureEngine g_structure_engine;
+CMultiTimeframeEngine g_mtf_engine;
 CDecisionEngine    g_decision_engine;
 CStatistics        g_statistics;
 CDashboard         g_dashboard;
@@ -862,6 +818,7 @@ int OnInit()
 
    g_session_filter.Init(InpUseSessionFilter, InpSessionStartHour, InpSessionEndHour);
    g_frequency_manager.Init(g_market_data, InpUseDecisionCooldown, InpDecisionCooldownSeconds);
+   g_structure_engine.Init(InpStructureLookbackBars, InpSwingDepthBars);
    if(!g_decision_engine.Init(g_market_data, InpMaxSpreadPoints, InpMinimumMarketScore,
                               InpMinimumDecisionConfidence, InpMinimumEMAGapATR, InpMinimumDirectionalDIGap,
                               InpUseCandleConfirmation, InpMinimumCandleBodyATR, g_logger))
@@ -874,8 +831,8 @@ int OnInit()
    g_dashboard.Init(InpEnableDashboard);
    g_market_scanner.Scan(g_market_data, g_indicator_engine, g_logger);
    for(int index = 0; index < g_market_data.SymbolCount(); index++)
-      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_session_filter, g_frequency_manager, g_logger));
-   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics);
+      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_session_filter, g_frequency_manager, g_structure_engine, g_mtf_engine, g_logger));
+   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics, g_structure_engine);
 
    g_logger.Info("Initialization completed successfully.");
    return INIT_SUCCEEDED;
@@ -898,7 +855,7 @@ void OnTick()
 
       g_trade_manager.Manage(symbol, g_indicator_engine, g_trade_engine, g_logger);
       g_market_scanner.ScanSymbol(symbol, g_market_data, g_indicator_engine, g_logger);
-      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_frequency_manager, g_logger));
+      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_frequency_manager, g_structure_engine, g_mtf_engine, g_logger));
 
       const int spread_points = g_market_data.SpreadPoints(symbol);
       if(!g_risk_manager.IsSpreadAllowed(symbol, spread_points, g_logger))
@@ -935,7 +892,7 @@ void OnTick()
          g_trade_engine.Sell(symbol, lot, NormalizeDouble(tick.bid + stop_distance, digits), NormalizeDouble(tick.bid - take_profit_distance, digits), "ApexScalperPro ST Sell", g_logger);
    }
 
-   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics);
+   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics, g_structure_engine);
 }
 
 //+------------------------------------------------------------------+
