@@ -515,109 +515,7 @@ public:
    bool MarketIsVolatile(const string symbol = "", const int shift = 0)
    {
       const string target_symbol = symbol == "" ? _Symbol : symbol;
-      const double point = SymbolInfoDouble(…8539 tokens truncated… }
-};
-
-//+------------------------------------------------------------------+
-//| Trade engine                                                     |
-//+------------------------------------------------------------------+
-class CTradeEngine
-{
-private:
-   CTrade m_trade;
-   ulong  m_magic_number;
-   int    m_deviation_points;
-   bool   m_enabled;
-   bool   m_tester_only;
-
-public:
-   void Init(const ulong magic_number, const int deviation_points, const bool enabled, const bool tester_only)
-   {
-      m_magic_number     = magic_number;
-      m_deviation_points = deviation_points;
-      m_enabled          = enabled;
-      m_tester_only      = tester_only;
-
-      m_trade.SetExpertMagicNumber(m_magic_number);
-      m_trade.SetDeviationInPoints(m_deviation_points);
-      m_trade.SetTypeFillingBySymbol(_Symbol);
-   }
-
-   bool TradingEnabled()
-   {
-      return m_enabled && (!m_tester_only || (bool)MQLInfoInteger(MQL_TESTER));
-   }
-
-   bool Buy(const string symbol, const double lot, const double stop_loss, const double take_profit, const string comment, CLogger &logger)
-   {
-      if(!TradingEnabled())
-      {
-         logger.Info("Buy request ignored because Strategy Tester trading is disabled.");
-         return false;
-      }
-
-      m_trade.SetTypeFillingBySymbol(symbol);
-      ResetLastError();
-      if(!m_trade.Buy(lot, symbol, 0.0, stop_loss, take_profit, comment))
-      {
-         logger.Error(StringFormat("Buy failed for %s. Retcode=%u LastError=%d", symbol, m_trade.ResultRetcode(), GetLastError()));
-         return false;
-      }
-
-      logger.Info(StringFormat("Buy placed for %s, lot %.2f, SL %.5f, TP %.5f.", symbol, lot, stop_loss, take_profit));
-      return true;
-   }
-
-   bool Sell(const string symbol, const double lot, const double stop_loss, const double take_profit, const string comment, CLogger &logger)
-   {
-      if(!TradingEnabled())
-      {
-         logger.Info("Sell request ignored because Strategy Tester trading is disabled.");
-         return false;
-      }
-
-      m_trade.SetTypeFillingBySymbol(symbol);
-      ResetLastError();
-      if(!m_trade.Sell(lot, symbol, 0.0, stop_loss, take_profit, comment))
-      {
-         logger.Error(StringFormat("Sell failed for %s. Retcode=%u LastError=%d", symbol, m_trade.ResultRetcode(), GetLastError()));
-         return false;
-      }
-
-      logger.Info(StringFormat("Sell placed for %s, lot %.2f, SL %.5f, TP %.5f.", symbol, lot, stop_loss, take_profit));
-      return true;
-   }
-
-   bool ModifyPosition(const ulong ticket, const double stop_loss, const double take_profit, CLogger &logger)
-   {
-      if(!TradingEnabled())
-         return false;
-      ResetLastError();
-      if(!m_trade.PositionModify(ticket, stop_loss, take_profit))
-      {
-         logger.Error(StringFormat("Position modification failed for %I64u. Retcode=%u LastError=%d", ticket, m_trade.ResultRetcode(), GetLastError()));
-         return false;
-      }
-      return true;
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Trade manager                                                     |
-//+------------------------------------------------------------------+
-class CTradeManager
-{
-private:
-   ulong  m_magic_number;
-   bool   m_break_even_enabled;
-   double m_break_even_trigger_atr;
-   int    m_break_even_offset_points;
-   bool   m_trailing_enabled;
-   double m_trailing_start_atr;
-   double m_trailing_distance_atr;
-
-public:
-   void Init(const ulong magic_number, const bool break_even_enabled, const double break_even_trigger_atr, const int break_even_offset_points,
+      const double point = SymbolInfoDouble(…9443 tokens truncated…magic_number, const bool break_even_enabled, const double break_even_trigger_atr, const int break_even_offset_points,
              const bool trailing_enabled, const double trailing_start_atr, const double trailing_distance_atr)
    {
       m_magic_number = magic_number;
@@ -693,6 +591,17 @@ private:
    long m_buy_decisions;
    long m_sell_decisions;
    long m_no_trade_decisions;
+   long m_trades_executed;
+   long m_wins;
+   long m_losses;
+   long m_consecutive_wins;
+   long m_consecutive_losses;
+   long m_max_consecutive_wins;
+   long m_max_consecutive_losses;
+   double m_r_multiple_total;
+   long m_r_multiple_count;
+   ulong m_position_ids[];
+   double m_position_risks[];
 
 public:
    void Reset()
@@ -701,6 +610,8 @@ public:
       m_buy_decisions = 0;
       m_sell_decisions = 0;
       m_no_trade_decisions = 0;
+      m_trades_executed=0; m_wins=0; m_losses=0; m_consecutive_wins=0; m_consecutive_losses=0; m_max_consecutive_wins=0; m_max_consecutive_losses=0; m_r_multiple_total=0.0; m_r_multiple_count=0;
+      ArrayResize(m_position_ids,0); ArrayResize(m_position_risks,0);
    }
 
    void RecordDecision(const DecisionType decision)
@@ -714,9 +625,23 @@ public:
          m_no_trade_decisions++;
    }
 
+   void RegisterTrade(const ulong position_id, const double risk_cash)
+   {
+      m_trades_executed++;
+      const int size=ArraySize(m_position_ids); ArrayResize(m_position_ids,size+1); ArrayResize(m_position_risks,size+1); m_position_ids[size]=position_id; m_position_risks[size]=risk_cash;
+   }
+
+   void RecordClosedTrade(const ulong position_id, const double net_profit)
+   {
+      double risk=0.0; for(int i=0;i<ArraySize(m_position_ids);i++) if(m_position_ids[i]==position_id){risk=m_position_risks[i]; break;}
+      if(risk>0.0){m_r_multiple_total+=net_profit/risk; m_r_multiple_count++;}
+      if(net_profit>0.0){m_wins++; m_consecutive_wins++; m_consecutive_losses=0; m_max_consecutive_wins=MathMax(m_max_consecutive_wins,m_consecutive_wins);}
+      else if(net_profit<0.0){m_losses++; m_consecutive_losses++; m_consecutive_wins=0; m_max_consecutive_losses=MathMax(m_max_consecutive_losses,m_consecutive_losses);}
+   }
+
    string DecisionSummary()
    {
-      return StringFormat("Evaluations: %I64d | BUY: %I64d | SELL: %I64d | NO TRADE: %I64d", m_evaluations, m_buy_decisions, m_sell_decisions, m_no_trade_decisions);
+      return StringFormat("Signals: %I64d | Rejected: %I64d | Trades: %I64d | W/L: %I64d/%I64d | Avg R: %.2f | Streak W/L: %I64d/%I64d", m_buy_decisions+m_sell_decisions, m_no_trade_decisions, m_trades_executed, m_wins, m_losses, m_r_multiple_count>0?m_r_multiple_total/m_r_multiple_count:0.0, m_max_consecutive_wins, m_max_consecutive_losses);
    }
 };
 
@@ -886,10 +811,16 @@ void OnTick()
          continue;
       }
 
+      const double tick_size=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE), tick_value=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_VALUE);
+      const double risk_cash=tick_size>0.0 ? stop_distance/tick_size*tick_value*lot : 0.0;
+      g_logger.Info(StringFormat("Trade candidate %s %s: confidence %.0f%%; filters: %s", symbol, g_decision_engine.DecisionText(symbol), g_decision_engine.DecisionConfidence(symbol), g_decision_engine.DecisionReason(symbol)));
+      bool executed=false;
       if(decision == DECISION_BUY)
-         g_trade_engine.Buy(symbol, lot, NormalizeDouble(tick.ask - stop_distance, digits), NormalizeDouble(tick.ask + take_profit_distance, digits), "ApexScalperPro ST Buy", g_logger);
+         executed=g_trade_engine.Buy(symbol, lot, NormalizeDouble(tick.ask - stop_distance, digits), NormalizeDouble(tick.ask + take_profit_distance, digits), "ApexScalperPro ST Buy", g_logger);
       else if(decision == DECISION_SELL)
-         g_trade_engine.Sell(symbol, lot, NormalizeDouble(tick.bid + stop_distance, digits), NormalizeDouble(tick.bid - take_profit_distance, digits), "ApexScalperPro ST Sell", g_logger);
+         executed=g_trade_engine.Sell(symbol, lot, NormalizeDouble(tick.bid + stop_distance, digits), NormalizeDouble(tick.bid - take_profit_distance, digits), "ApexScalperPro ST Sell", g_logger);
+      if(executed)
+         g_statistics.RegisterTrade(g_trade_engine.LastPositionId(),risk_cash);
    }
 
    g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics, g_structure_engine);
@@ -903,6 +834,23 @@ void OnDeinit(const int reason)
    g_indicator_engine.Release();
    g_dashboard.Clear();
    g_logger.Info(StringFormat("ApexScalperPro deinitialized. Reason=%d", reason));
+}
+
+//+------------------------------------------------------------------+
+//| Trade transaction telemetry                                      |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &transaction, const MqlTradeRequest &request, const MqlTradeResult &result)
+{
+   if(transaction.type!=TRADE_TRANSACTION_DEAL_ADD || transaction.deal==0 || !HistoryDealSelect(transaction.deal))
+      return;
+   if((ulong)HistoryDealGetInteger(transaction.deal,DEAL_MAGIC)!=InpMagicNumber)
+      return;
+   if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(transaction.deal,DEAL_ENTRY)!=DEAL_ENTRY_OUT)
+      return;
+   const double net=HistoryDealGetDouble(transaction.deal,DEAL_PROFIT)+HistoryDealGetDouble(transaction.deal,DEAL_SWAP)+HistoryDealGetDouble(transaction.deal,DEAL_COMMISSION);
+   const ulong position_id=(ulong)HistoryDealGetInteger(transaction.deal,DEAL_POSITION_ID);
+   g_statistics.RecordClosedTrade(position_id,net);
+   g_logger.Info(StringFormat("Trade closed: position %I64u, net %.2f, reason %s",position_id,net,EnumToString((ENUM_DEAL_REASON)HistoryDealGetInteger(transaction.deal,DEAL_REASON))));
 }
 
 
