@@ -1,5 +1,14 @@
 # Changelog
 
+## Phase 2 - Strategy Tester execution and trade management
+
+- Adds the first executable entry path, permitted only when both `InpEnableTrading` and `InpEnableStrategyTesterTrading` are true and the EA is running in MT5 Strategy Tester. Live execution remains blocked.
+- Adds ATR-derived initial stop loss and take profit with configurable multipliers and broker stop-level protection.
+- Uses actual stop distance for optional equity-risk lot sizing; fixed lots remain supported.
+- Adds a Trade Manager module for magic-number-isolated break-even and ATR trailing-stop management.
+- Prevents duplicate managed positions in the same direction and retains the existing hedging and position-limit controls.
+- Compiles with 0 errors and 0 warnings.
+
 ## Phase 2 - Signal quality controls
 
 - Adds optional closed-candle direction/body confirmation, measured as a configurable fraction of ATR, to reduce weak and doji-like entries.
