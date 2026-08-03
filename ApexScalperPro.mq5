@@ -63,6 +63,8 @@ input int    InpMinimumSRDistancePoints      = 50;         // Minimum distance t
 input bool   InpUseMultiTimeframeConfirmation = true;      // Confirm local signal on a higher timeframe
 input ENUM_TIMEFRAMES InpConfirmationTimeframe = PERIOD_M5; // Higher confirmation timeframe
 input int    InpMinimumTrendScore            = 70;         // Minimum composite trend score
+input bool   InpEnableResearchExport         = true;       // Export completed Strategy Tester trades to CSV
+input string InpResearchExportFile           = "ApexScalperPro_Trades.csv"; // CSV file in MQL5/Files
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -509,75 +511,16 @@ public:
 
    bool TrendStrengthStrong(const string symbol = "", const int shift = 0)
    {
-      return GetADX(symbol, shift) >= m_strong_adx_level;
-   }
-
-   bool MarketIsVolatile(const string symbol = "", const int shift = 0)
-   {
-      const string target_symbol = symbol == "" ? _Symbol : symbol;
-      const double point = SymbolInfoDouble(…9443 tokens truncated…magic_number, const bool break_even_enabled, const double break_even_trigger_atr, const int break_even_offset_points,
-             const bool trailing_enabled, const double trailing_start_atr, const double trailing_distance_atr)
-   {
-      m_magic_number = magic_number;
-      m_break_even_enabled = break_even_enabled;
-      m_break_even_trigger_atr = break_even_trigger_atr;
-      m_break_even_offset_points = break_even_offset_points;
-      m_trailing_enabled = trailing_enabled;
-      m_trailing_start_atr = trailing_start_atr;
-      m_trailing_distance_atr = trailing_distance_atr;
-   }
-
-   void Manage(const string symbol, CIndicatorEngine &indicator_engine, CTradeEngine &trade_engine, CLogger &logger)
-   {
-      if(!trade_engine.TradingEnabled())
-         return;
-
-      const double atr = indicator_engine.GetATR(symbol, 0);
-      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-      const int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-      const int stops_level = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
-      MqlTick tick;
-      if(atr <= 0.0 || point <= 0.0 || !SymbolInfoTick(symbol, tick))
-         return;
-
-      for(int index = PositionsTotal() - 1; index >= 0; index--)
-      {
-         const ulong ticket = PositionGetTicket(index);
-         if(ticket == 0 || !PositionSelectByTicket(ticket))
-            continue;
-         if(PositionGetString(POSITION_SYMBOL) != symbol || (ulong)PositionGetInteger(POSITION_MAGIC) != m_magic_number)
-            continue;
-
-         const ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-         const double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
-         const double current_sl = PositionGetDouble(POSITION_SL);
-         const double take_profit = PositionGetDouble(POSITION_TP);
-         const double market_price = type == POSITION_TYPE_BUY ? tick.bid : tick.ask;
-         const double profit_distance = type == POSITION_TYPE_BUY ? market_price - open_price : open_price - market_price;
-         double proposed_sl = current_sl;
-
-         if(m_break_even_enabled && profit_distance >= atr * m_break_even_trigger_atr)
-         {
-            const double break_even = type == POSITION_TYPE_BUY ? open_price + m_break_even_offset_points * point : open_price - m_break_even_offset_points * point;
-            if((type == POSITION_TYPE_BUY && (proposed_sl == 0.0 || break_even > proposed_sl)) || (type == POSITION_TYPE_SELL && (proposed_sl == 0.0 || break_even < proposed_sl)))
-               proposed_sl = break_even;
-         }
-
-         if(m_trailing_enabled && profit_distance >= atr * m_trailing_start_atr)
-         {
-            const double trailing_sl = type == POSITION_TYPE_BUY ? market_price - atr * m_trailing_distance_atr : market_price + atr * m_trailing_distance_atr;
-            if((type == POSITION_TYPE_BUY && (proposed_sl == 0.0 || trailing_sl > proposed_sl)) || (type == POSITION_TYPE_SELL && (proposed_sl == 0.0 || trailing_sl < proposed_sl)))
-               proposed_sl = trailing_sl;
-         }
-
-         if(proposed_sl == current_sl || proposed_sl == 0.0)
-            continue;
-         if(type == POSITION_TYPE_BUY && proposed_sl >= tick.bid - stops_level * point)
-            continue;
-         if(type == POSITION_TYPE_SELL && proposed_sl <= tick.ask + stops_level * point)
-            continue;
-         trade_engine.ModifyPosition(ticket, NormalizeDouble(proposed_sl, digits), take_profit, logger);
-      }
+      return GetADX(symbol, shift) >= m_st…10553 tokens truncated…READ|FILE_WRITE|FILE_ANSI|FILE_SHARE_READ,',');
+      if(handle==INVALID_HANDLE) return;
+      if(FileSize(handle)==0) FileWrite(handle,"Entry Time","Exit Time","Symbol","Direction","Entry Price","Exit Price","Lot Size","Stop Loss","Take Profit","ATR","Spread","Session","EMA Trend","ADX","DI+","DI-","Market Structure","Support Distance","Resistance Distance","Confidence Score","Trade Duration Seconds","Profit/Loss","Profit in R","Reason for Entry","Reason for Exit");
+      const ulong position=(ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID); datetime entry_time=0; double entry_price=0.0,volume=0.0,sl=0.0,tp=0.0;
+      HistorySelect(0,TimeCurrent());
+      for(int i=0;i<HistoryDealsTotal();i++){const ulong candidate=HistoryDealGetTicket(i); if((ulong)HistoryDealGetInteger(candidate,DEAL_POSITION_ID)==position && (ENUM_DEAL_ENTRY)HistoryDealGetInteger(candidate,DEAL_ENTRY)==DEAL_ENTRY_IN){entry_time=(datetime)HistoryDealGetInteger(candidate,DEAL_TIME); entry_price=HistoryDealGetDouble(candidate,DEAL_PRICE); volume=HistoryDealGetDouble(candidate,DEAL_VOLUME); sl=HistoryDealGetDouble(candidate,DEAL_SL); tp=HistoryDealGetDouble(candidate,DEAL_TP); break;}}
+      FileSeek(handle,0,SEEK_END);
+      const datetime exit_time=(datetime)HistoryDealGetInteger(deal,DEAL_TIME); const double net=HistoryDealGetDouble(deal,DEAL_PROFIT)+HistoryDealGetDouble(deal,DEAL_SWAP)+HistoryDealGetDouble(deal,DEAL_COMMISSION);
+      FileWrite(handle,TimeToString(entry_time,TIME_DATE|TIME_SECONDS),TimeToString(exit_time,TIME_DATE|TIME_SECONDS),HistoryDealGetString(deal,DEAL_SYMBOL),EnumToString((ENUM_DEAL_TYPE)HistoryDealGetInteger(deal,DEAL_TYPE)),entry_price,HistoryDealGetDouble(deal,DEAL_PRICE),volume,sl,tp,0.0,0,"","","",0.0,0.0,"",0.0,0.0,0.0,(long)(exit_time-entry_time),net,risk_cash>0.0?net/risk_cash:0.0,entry_reason,exit_reason);
+      FileClose(handle);
    }
 };
 
@@ -600,6 +543,11 @@ private:
    long m_max_consecutive_losses;
    double m_r_multiple_total;
    long m_r_multiple_count;
+   double m_net_profit;
+   double m_gross_profit;
+   double m_gross_loss;
+   double m_peak_equity;
+   double m_max_drawdown;
    ulong m_position_ids[];
    double m_position_risks[];
 
@@ -612,6 +560,7 @@ public:
       m_no_trade_decisions = 0;
       m_trades_executed=0; m_wins=0; m_losses=0; m_consecutive_wins=0; m_consecutive_losses=0; m_max_consecutive_wins=0; m_max_consecutive_losses=0; m_r_multiple_total=0.0; m_r_multiple_count=0;
       ArrayResize(m_position_ids,0); ArrayResize(m_position_risks,0);
+      m_net_profit=0.0; m_gross_profit=0.0; m_gross_loss=0.0; m_peak_equity=AccountInfoDouble(ACCOUNT_BALANCE); m_max_drawdown=0.0;
    }
 
    void RecordDecision(const DecisionType decision)
@@ -635,8 +584,22 @@ public:
    {
       double risk=0.0; for(int i=0;i<ArraySize(m_position_ids);i++) if(m_position_ids[i]==position_id){risk=m_position_risks[i]; break;}
       if(risk>0.0){m_r_multiple_total+=net_profit/risk; m_r_multiple_count++;}
+      m_net_profit+=net_profit; if(net_profit>0.0) m_gross_profit+=net_profit; else m_gross_loss+=-net_profit;
+      const double equity=AccountInfoDouble(ACCOUNT_EQUITY); m_peak_equity=MathMax(m_peak_equity,equity); m_max_drawdown=MathMax(m_max_drawdown,m_peak_equity-equity);
       if(net_profit>0.0){m_wins++; m_consecutive_wins++; m_consecutive_losses=0; m_max_consecutive_wins=MathMax(m_max_consecutive_wins,m_consecutive_wins);}
       else if(net_profit<0.0){m_losses++; m_consecutive_losses++; m_consecutive_wins=0; m_max_consecutive_losses=MathMax(m_max_consecutive_losses,m_consecutive_losses);}
+   }
+
+   double RiskForPosition(const ulong position_id)
+   {
+      for(int i=0;i<ArraySize(m_position_ids);i++) if(m_position_ids[i]==position_id) return m_position_risks[i];
+      return 0.0;
+   }
+
+   string BacktestSummary()
+   {
+      const double trades=(double)(m_wins+m_losses); const double pf=m_gross_loss>0.0?m_gross_profit/m_gross_loss:0.0;
+      return StringFormat("Backtest summary: Net %.2f | Gross P/L %.2f/%.2f | PF %.2f | DD %.2f | Win rate %.1f%% | Avg R %.2f",m_net_profit,m_gross_profit,m_gross_loss,pf,m_max_drawdown,trades>0.0?100.0*m_wins/trades:0.0,m_r_multiple_count>0?m_r_multiple_total/m_r_multiple_count:0.0);
    }
 
    string DecisionSummary()
@@ -712,6 +675,7 @@ CMarketStructureEngine g_structure_engine;
 CMultiTimeframeEngine g_mtf_engine;
 CDecisionEngine    g_decision_engine;
 CStatistics        g_statistics;
+CResearchExporter  g_research_exporter;
 CDashboard         g_dashboard;
 
 //+------------------------------------------------------------------+
@@ -753,6 +717,7 @@ int OnInit()
    g_trade_manager.Init(InpMagicNumber, InpEnableBreakEven, InpBreakEvenTriggerATR, InpBreakEvenOffsetPoints,
                         InpEnableATRTrailing, InpTrailingStartATR, InpTrailingDistanceATR);
    g_statistics.Reset();
+   g_research_exporter.Init(InpEnableResearchExport,InpResearchExportFile);
    g_dashboard.Init(InpEnableDashboard);
    g_market_scanner.Scan(g_market_data, g_indicator_engine, g_logger);
    for(int index = 0; index < g_market_data.SymbolCount(); index++)
@@ -833,6 +798,8 @@ void OnDeinit(const int reason)
 {
    g_indicator_engine.Release();
    g_dashboard.Clear();
+   if(MQLInfoInteger(MQL_TESTER))
+      g_logger.Info(g_statistics.BacktestSummary());
    g_logger.Info(StringFormat("ApexScalperPro deinitialized. Reason=%d", reason));
 }
 
@@ -850,6 +817,7 @@ void OnTradeTransaction(const MqlTradeTransaction &transaction, const MqlTradeRe
    const double net=HistoryDealGetDouble(transaction.deal,DEAL_PROFIT)+HistoryDealGetDouble(transaction.deal,DEAL_SWAP)+HistoryDealGetDouble(transaction.deal,DEAL_COMMISSION);
    const ulong position_id=(ulong)HistoryDealGetInteger(transaction.deal,DEAL_POSITION_ID);
    g_statistics.RecordClosedTrade(position_id,net);
+   g_research_exporter.ExportClosedTrade(transaction.deal,g_statistics.RiskForPosition(position_id),HistoryDealGetString(transaction.deal,DEAL_COMMENT),EnumToString((ENUM_DEAL_REASON)HistoryDealGetInteger(transaction.deal,DEAL_REASON)));
    g_logger.Info(StringFormat("Trade closed: position %I64u, net %.2f, reason %s",position_id,net,EnumToString((ENUM_DEAL_REASON)HistoryDealGetInteger(transaction.deal,DEAL_REASON))));
 }
 
