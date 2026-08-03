@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 0.6|
+//|                      Professional MT5 Expert Advisor - Version 0.7|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "0.600"
-#property description "ApexScalperPro Version 0.6 - Session-Aware Decision Engine"
+#property version   "0.700"
+#property description "ApexScalperPro Version 0.7 - Money Management Infrastructure"
 
 #include <Trade/Trade.mqh>
 
@@ -37,6 +37,9 @@ input double InpMinimumDirectionalDIGap   = 3.0;        // Minimum +DI/-DI separ
 input bool   InpUseSessionFilter          = true;       // Restrict decisions to configured server-time session
 input int    InpSessionStartHour          = 7;          // Session start hour, server time (0..23)
 input int    InpSessionEndHour            = 20;         // Session end hour, server time (0..23, end exclusive)
+input bool   InpUseDynamicLotSizing        = false;      // Use equity-risk sizing instead of fixed lots
+input double InpRiskPerTradePercent        = 0.50;       // Equity risk percentage for dynamic lot sizing
+input int    InpReferenceStopPoints        = 100;        // Reference stop distance for risk sizing
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -592,94 +595,7 @@ public:
          m_volume_ratios[index] = 0.0;
          m_tradable[index] = false;
          m_ranging[index] = true;
-         m_high_volatility[index] = false;
-      }
-
-      logger.Info(StringFormat("Market scanner initialized for %d symbol(s).", m_symbol_count));
-      return m_symbol_count > 0;
-   }
-
-   bool ScanSymbol(const string symbol, CMarketDataManager &market_data, CIndicatorEngine &indicator_engine, CLogger &logger)
-   {
-      const int index …1799 tokens truncated…st string symbol)
-   {
-      for(int index = 0; index < m_symbol_count; index++)
-      {
-         if(m_symbols[index] == symbol)
-            return index;
-      }
-
-      return -1;
-   }
-
-   double ClampConfidence(const double value)
-   {
-      return MathMax(0.0, MathMin(100.0, MathRound(value)));
-   }
-
-   string DecisionToText(const DecisionType decision)
-   {
-      if(decision == DECISION_BUY)
-         return "BUY";
-      if(decision == DECISION_SELL)
-         return "SELL";
-      return "NO TRADE";
-   }
-
-   void AddReason(string &reason, const string item)
-   {
-      if(reason != "")
-         reason += "; ";
-      reason += item;
-   }
-
-public:
-   CDecisionEngine()
-   {
-      m_symbol_count = 0;
-      m_max_spread_points = 0;
-      m_minimum_market_score = 0;
-      m_minimum_confidence = 0;
-      m_minimum_ema_gap_atr = 0.0;
-      m_minimum_directional_di_gap = 0.0;
-   }
-
-   bool Init(CMarketDataManager &market_data,
-             const int max_spread_points,
-             const int minimum_market_score,
-             const int minimum_confidence,
-             const double minimum_ema_gap_atr,
-             const double minimum_directional_di_gap,
-             CLogger &logger)
-   {
-      m_symbol_count = market_data.SymbolCount();
-      m_max_spread_points = max_spread_points;
-      m_minimum_market_score = minimum_market_score;
-      m_minimum_confidence = minimum_confidence;
-      m_minimum_ema_gap_atr = minimum_ema_gap_atr;
-      m_minimum_directional_di_gap = minimum_directional_di_gap;
-
-      ArrayResize(m_symbols, m_symbol_count);
-      ArrayResize(m_decisions, m_symbol_count);
-      ArrayResize(m_confidence, m_symbol_count);
-      ArrayResize(m_reasons, m_symbol_count);
-
-      for(int index = 0; index < m_symbol_count; index++)
-      {
-         m_symbols[index] = market_data.SymbolAt(index);
-         m_decisions[index] = DECISION_NO_TRADE;
-         m_confidence[index] = 0.0;
-         m_reasons[index] = "Decision engine awaiting market scan";
-      }
-
-      logger.Info(StringFormat("Decision engine initialized for %d symbol(s).", m_symbol_count));
-      return m_symbol_count > 0;
-   }
-
-   DecisionType EvaluateDecision(const string symbol, CIndicatorEngine &indicator_engine, CMarketScanner &scanner, CSessionFilter &session_filter, CLogger &logger)
-   {
-      const int index = FindSymbolIndex(symbol);
-      if(index < 0)
+         m_high_volatility[i…2463 tokens truncated…      if(index < 0)
          return DECISION_NO_TRADE;
 
       const int confirmed_shift = 1;
@@ -802,7 +718,60 @@ public:
 };
 
 //+------------------------------------------------------------------+
-//| Risk manager skeleton                                            |
+//| Money management                                                 |
+//+------------------------------------------------------------------+
+class CMoneyManagement
+{
+private:
+   bool   m_use_dynamic_lot;
+   double m_risk_percent;
+   int    m_reference_stop_points;
+   double m_fixed_lot;
+
+public:
+   void Init(const bool use_dynamic_lot, const double risk_percent, const int reference_stop_points, const double fixed_lot)
+   {
+      m_use_dynamic_lot = use_dynamic_lot;
+      m_risk_percent = risk_percent;
+      m_reference_stop_points = reference_stop_points;
+      m_fixed_lot = fixed_lot;
+   }
+
+   bool DynamicSizingEnabled()
+   {
+      return m_use_dynamic_lot;
+   }
+
+   double CalculateLot(const string symbol, const int stop_points)
+   {
+      if(!m_use_dynamic_lot)
+         return m_fixed_lot;
+
+      const int effective_stop = stop_points > 0 ? stop_points : m_reference_stop_points;
+      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      const double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+      const double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+      const double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      if(effective_stop <= 0 || point <= 0.0 || tick_size <= 0.0 || tick_value <= 0.0 || equity <= 0.0)
+         return 0.0;
+
+      const double risk_cash = equity * m_risk_percent / 100.0;
+      const double loss_per_lot = effective_stop * point / tick_size * tick_value;
+      if(risk_cash <= 0.0 || loss_per_lot <= 0.0)
+         return 0.0;
+
+      const double min_lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+      const double max_lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+      const double lot_step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+      double lot = MathMax(min_lot, MathMin(max_lot, risk_cash / loss_per_lot));
+      if(lot_step > 0.0)
+         lot = MathFloor(lot / lot_step) * lot_step;
+      return NormalizeDouble(lot, 2);
+   }
+};
+
+//+------------------------------------------------------------------+
+//| Risk manager                                                      |
 //+------------------------------------------------------------------+
 class CRiskManager
 {
@@ -965,6 +934,7 @@ public:
 CLogger            g_logger;
 CMarketDataManager g_market_data;
 CRiskManager       g_risk_manager;
+CMoneyManagement   g_money_management;
 CTradeEngine       g_trade_engine;
 CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
@@ -978,11 +948,11 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 0.6.");
+   g_logger.Info("Initializing ApexScalperPro Version 0.7.");
 
-   if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0 || InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23)
+   if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0 || InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23 || InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0)
    {
-      g_logger.Error("Invalid Decision Engine inputs. Check confidence, separation thresholds, and session hours.");
+      g_logger.Error("Invalid inputs. Check Decision Engine, session, and money-management parameters.");
       return INIT_PARAMETERS_INCORRECT;
    }
 
@@ -990,6 +960,7 @@ int OnInit()
       return INIT_FAILED;
 
    g_risk_manager.Init(InpMaxSpreadPoints, InpFixedLot);
+   g_money_management.Init(InpUseDynamicLotSizing, InpRiskPerTradePercent, InpReferenceStopPoints, InpFixedLot);
 
    if(!g_indicator_engine.Init(g_market_data, InpTimeframe, InpFastEMAPeriod, InpSlowEMAPeriod, InpATRPeriod, InpADXPeriod,
                                InpVolumeAverageBars, InpStrongADXLevel, InpVolatilityATRPoints, InpHighVolumeMultiplier, g_logger))
@@ -1043,7 +1014,7 @@ void OnTick()
       if(!g_decision_engine.ShouldTrade(symbol))
          continue;
 
-      const double lot = g_risk_manager.LotSize(symbol);
+      const double lot = g_risk_manager.NormalizeLot(symbol, g_money_management.CalculateLot(symbol, InpReferenceStopPoints));
       if(lot <= 0.0)
          g_logger.Warn(StringFormat("Calculated lot size for %s is invalid: %.2f", symbol, lot));
    }
