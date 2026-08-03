@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 1.0 - Strategy Tester-ready foundation
+
+- Adds a central Configuration module with validation for market, decision, session, risk, money-management, and position inputs.
+- Promotes the EA to Version 1.0 with a clean MetaEditor build: 0 errors and 0 warnings.
+- Preserves the execution safety default: `InpEnableTrading=false`.
+- The Decision, Session, Money Management, Position, Hedging, Statistics, Dashboard, Risk, Indicator, Market Scanner, Logging, and Configuration modules are ready for measured MT5 Strategy Tester optimisation.
+
 ## Version 0.9 - Decision statistics
 
 - Adds a reusable Statistics module that records BUY, SELL, and NO TRADE decision outcomes.
