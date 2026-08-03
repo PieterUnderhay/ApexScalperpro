@@ -1,5 +1,11 @@
 # Changelog
 
+## Phase 2 - Signal quality controls
+
+- Adds optional closed-candle direction/body confirmation, measured as a configurable fraction of ATR, to reduce weak and doji-like entries.
+- Adds a per-symbol qualified-signal cooldown to reduce clustered signals; both controls are enabled by default and can be disabled or optimised in Strategy Tester.
+- Compiles cleanly with 0 errors and 0 warnings.
+
 ## Version 1.0 - Strategy Tester-ready foundation
 
 - Adds a central Configuration module with validation for market, decision, session, risk, money-management, and position inputs.
