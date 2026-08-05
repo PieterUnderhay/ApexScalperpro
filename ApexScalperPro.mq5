@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                               ApexScalperPro.mq5  |
-//|                      Professional MT5 Expert Advisor - Version 1.0|
+//|                      Professional MT5 Expert Advisor - Version 0.4|
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.000"
-#property description "ApexScalperPro Version 1.0 - Strategy Tester Ready"
+#property version   "0.40"
+#property description "ApexScalperPro Version 0.4 - Decision Engine"
 
 #include <Trade/Trade.mqh>
 
@@ -31,17 +31,6 @@ input double InpVolatilityATRPoints     = 100.0;       // Volatile market ATR th
 input double InpHighVolumeMultiplier    = 1.25;        // High volume multiplier over average
 input int    InpMinimumMarketScore       = 60;          // Minimum market quality score
 input double InpRangingADXLevel          = 18.0;        // Ranging market ADX threshold
-input int    InpMinimumDecisionConfidence = 70;         // Minimum confidence required for BUY or SELL
-input double InpMinimumEMAGapATR          = 0.10;       // Minimum EMA separation as a fraction of ATR
-input double InpMinimumDirectionalDIGap   = 3.0;        // Minimum +DI/-DI separation
-input bool   InpUseSessionFilter          = true;       // Restrict decisions to configured server-time session
-input int    InpSessionStartHour          = 7;          // Session start hour, server time (0..23)
-input int    InpSessionEndHour            = 20;         // Session end hour, server time (0..23, end exclusive)
-input bool   InpUseDynamicLotSizing        = false;      // Use equity-risk sizing instead of fixed lots
-input double InpRiskPerTradePercent        = 0.50;       // Equity risk percentage for dynamic lot sizing
-input int    InpReferenceStopPoints        = 100;        // Reference stop distance for risk sizing
-input int    InpMaxManagedPositions        = 1;          // Future maximum positions per symbol and magic number
-input bool   InpAllowHedging                = false;      // Future permission for opposite-direction managed exposure
 
 //+------------------------------------------------------------------+
 //| Logger                                                           |
@@ -74,38 +63,6 @@ public:
    void Error(const string message)
    {
       PrintFormat("[%s][ERROR] %s", m_prefix, message);
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Configuration                                                     |
-//+------------------------------------------------------------------+
-class CConfiguration
-{
-public:
-   bool Validate(CLogger &logger)
-   {
-      if(InpMinimumDecisionConfidence < 1 || InpMinimumDecisionConfidence > 100 || InpMinimumEMAGapATR < 0.0 || InpMinimumDirectionalDIGap < 0.0)
-      {
-         logger.Error("Invalid Decision Engine inputs.");
-         return false;
-      }
-      if(InpSessionStartHour < 0 || InpSessionStartHour > 23 || InpSessionEndHour < 0 || InpSessionEndHour > 23)
-      {
-         logger.Error("Invalid session hour inputs.");
-         return false;
-      }
-      if(InpRiskPerTradePercent <= 0.0 || InpRiskPerTradePercent > 100.0 || InpReferenceStopPoints <= 0 || InpMaxManagedPositions < 1 || InpFixedLot <= 0.0)
-      {
-         logger.Error("Invalid risk, money-management, or position inputs.");
-         return false;
-      }
-      if(InpFastEMAPeriod <= 0 || InpSlowEMAPeriod <= InpFastEMAPeriod || InpATRPeriod <= 0 || InpADXPeriod <= 0 || InpVolumeAverageBars <= 0 || InpMaxSpreadPoints < 0)
-      {
-         logger.Error("Invalid market or indicator inputs.");
-         return false;
-      }
-      return true;
    }
 };
 
@@ -447,9 +404,9 @@ public:
       return IndicatorValueForSymbol(symbol == "" ? _Symbol : symbol, m_adx_handles, 2, shift);
    }
 
-   long GetCurrentVolume(const string symbol = "", const int shift = 0)
+   long GetCurrentVolume(const string symbol = "")
    {
-      return VolumeForSymbol(symbol == "" ? _Symbol : symbol, shift);
+      return VolumeForSymbol(symbol == "" ? _Symbol : symbol, 0);
    }
 
    double GetAverageVolume(const int bars, const string symbol = "")
@@ -476,34 +433,34 @@ public:
       return total_volume / copied;
    }
 
-   bool TrendIsBullish(const string symbol = "", const int shift = 0)
+   bool TrendIsBullish(const string symbol = "")
    {
-      return GetFastEMA(symbol, shift) > GetSlowEMA(symbol, shift) && GetPlusDI(symbol, shift) > GetMinusDI(symbol, shift);
+      return GetFastEMA(symbol) > GetSlowEMA(symbol) && GetPlusDI(symbol) > GetMinusDI(symbol);
    }
 
-   bool TrendIsBearish(const string symbol = "", const int shift = 0)
+   bool TrendIsBearish(const string symbol = "")
    {
-      return GetFastEMA(symbol, shift) < GetSlowEMA(symbol, shift) && GetMinusDI(symbol, shift) > GetPlusDI(symbol, shift);
+      return GetFastEMA(symbol) < GetSlowEMA(symbol) && GetMinusDI(symbol) > GetPlusDI(symbol);
    }
 
-   bool TrendStrengthStrong(const string symbol = "", const int shift = 0)
+   bool TrendStrengthStrong(const string symbol = "")
    {
-      return GetADX(symbol, shift) >= m_strong_adx_level;
+      return GetADX(symbol) >= m_strong_adx_level;
    }
 
-   bool MarketIsVolatile(const string symbol = "", const int shift = 0)
+   bool MarketIsVolatile(const string symbol = "")
    {
       const string target_symbol = symbol == "" ? _Symbol : symbol;
       const double point = SymbolInfoDouble(target_symbol, SYMBOL_POINT);
       if(point <= 0.0)
          return false;
 
-      return GetATR(target_symbol, shift) / point >= m_volatility_atr_points;
+      return GetATR(target_symbol) / point >= m_volatility_atr_points;
    }
 
-   bool VolumeIsHigh(const string symbol = "", const int shift = 0)
+   bool VolumeIsHigh(const string symbol = "")
    {
-      const long current_volume = GetCurrentVolume(symbol, shift);
+      const long current_volume = GetCurrentVolume(symbol);
       const double average_volume = GetAverageVolume(m_volume_average_bars, symbol);
       return average_volume > 0.0 && (double)current_volume >= average_volume * m_high_volume_multiplier;
    }
@@ -592,7 +549,319 @@ public:
              const int max_spread_points,
              const int minimum_market_score,
              const int volume_average_bars,
-             const double strong_…3737 tokens truncated…= m_minimum_confidence)
+             const double strong_adx_level,
+             const double ranging_adx_level,
+             const double volatility_atr_points,
+             const double high_volume_multiplier,
+             CLogger &logger)
+   {
+      m_symbol_count = market_data.SymbolCount();
+      m_max_spread_points = max_spread_points;
+      m_minimum_market_score = minimum_market_score;
+      m_volume_average_bars = volume_average_bars;
+      m_strong_adx_level = strong_adx_level;
+      m_ranging_adx_level = ranging_adx_level;
+      m_volatility_atr_points = volatility_atr_points;
+      m_high_volume_multiplier = high_volume_multiplier;
+
+      ArrayResize(m_symbols, m_symbol_count);
+      ArrayResize(m_scores, m_symbol_count);
+      ArrayResize(m_trends, m_symbol_count);
+      ArrayResize(m_adx_values, m_symbol_count);
+      ArrayResize(m_atr_points, m_symbol_count);
+      ArrayResize(m_spread_points, m_symbol_count);
+      ArrayResize(m_volume_ratios, m_symbol_count);
+      ArrayResize(m_tradable, m_symbol_count);
+      ArrayResize(m_ranging, m_symbol_count);
+      ArrayResize(m_high_volatility, m_symbol_count);
+
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         m_symbols[index] = market_data.SymbolAt(index);
+         m_scores[index] = 0;
+         m_trends[index] = MARKET_TREND_RANGE;
+         m_adx_values[index] = 0.0;
+         m_atr_points[index] = 0.0;
+         m_spread_points[index] = 0;
+         m_volume_ratios[index] = 0.0;
+         m_tradable[index] = false;
+         m_ranging[index] = true;
+         m_high_volatility[index] = false;
+      }
+
+      logger.Info(StringFormat("Market scanner initialized for %d symbol(s).", m_symbol_count));
+      return m_symbol_count > 0;
+   }
+
+   bool ScanSymbol(const string symbol, CMarketDataManager &market_data, CIndicatorEngine &indicator_engine, CLogger &logger)
+   {
+      const int index = FindSymbolIndex(symbol);
+      if(index < 0)
+         return false;
+
+      const double fast_ema = indicator_engine.GetFastEMA(symbol);
+      const double slow_ema = indicator_engine.GetSlowEMA(symbol);
+      const double plus_di = indicator_engine.GetPlusDI(symbol);
+      const double minus_di = indicator_engine.GetMinusDI(symbol);
+      const double adx = indicator_engine.GetADX(symbol);
+      const double atr = indicator_engine.GetATR(symbol);
+      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      const long current_volume = indicator_engine.GetCurrentVolume(symbol);
+      const double average_volume = indicator_engine.GetAverageVolume(m_volume_average_bars, symbol);
+      const int spread = market_data.SpreadPoints(symbol);
+
+      m_adx_values[index] = adx;
+      m_spread_points[index] = spread;
+      m_atr_points[index] = point > 0.0 ? atr / point : 0.0;
+      m_volume_ratios[index] = average_volume > 0.0 ? (double)current_volume / average_volume : 0.0;
+      m_high_volatility[index] = m_atr_points[index] >= m_volatility_atr_points;
+      m_ranging[index] = adx <= m_ranging_adx_level || MathAbs(fast_ema - slow_ema) <= point * 2.0;
+
+      if(m_ranging[index])
+         m_trends[index] = MARKET_TREND_RANGE;
+      else if(fast_ema > slow_ema && plus_di >= minus_di)
+         m_trends[index] = MARKET_TREND_BULLISH;
+      else if(fast_ema < slow_ema && minus_di > plus_di)
+         m_trends[index] = MARKET_TREND_BEARISH;
+      else
+         m_trends[index] = MARKET_TREND_RANGE;
+
+      const double ema_score = m_trends[index] == MARKET_TREND_RANGE ? 0.0 : 25.0;
+      const double adx_score = 25.0 * ComponentScore(adx, m_strong_adx_level);
+      const double atr_score = m_high_volatility[index] ? 10.0 : 20.0 * ComponentScore(m_atr_points[index], m_volatility_atr_points);
+      const double volume_score = 15.0 * ComponentScore(m_volume_ratios[index], m_high_volume_multiplier);
+      const double spread_score = spread <= m_max_spread_points ? 15.0 * (1.0 - ((double)spread / MathMax(1.0, (double)m_max_spread_points)) * 0.5) : 0.0;
+
+      m_scores[index] = ClampScore(ema_score + adx_score + atr_score + volume_score + spread_score);
+      m_tradable[index] = m_scores[index] >= m_minimum_market_score && !m_ranging[index] && spread <= m_max_spread_points && average_volume > 0.0;
+
+      logger.Info(StringFormat("%s scan: score=%d trend=%s adx=%.2f spread=%d atr=%.1f volume=%.2f tradable=%s",
+                               symbol, m_scores[index], TrendToText(m_trends[index]), adx, spread,
+                               m_atr_points[index], m_volume_ratios[index], m_tradable[index] ? "true" : "false"));
+      return true;
+   }
+
+   void Scan(CMarketDataManager &market_data, CIndicatorEngine &indicator_engine, CLogger &logger)
+   {
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         if(m_symbols[index] != "")
+            ScanSymbol(m_symbols[index], market_data, indicator_engine, logger);
+      }
+   }
+
+   bool IsMarketTradable(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 && m_tradable[index];
+   }
+
+   int GetMarketScore(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 ? m_scores[index] : 0;
+   }
+
+   string TrendDirection(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 ? TrendToText(m_trends[index]) : "Unknown";
+   }
+
+   string TrendStrength(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      if(index < 0)
+         return "Unknown";
+      if(m_ranging[index])
+         return "Ranging";
+      if(m_adx_values[index] >= m_strong_adx_level)
+         return "Strong";
+      return "Developing";
+   }
+
+   double GetADX(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 ? m_adx_values[index] : 0.0;
+   }
+
+   int GetSpreadPoints(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 ? m_spread_points[index] : 0;
+   }
+
+   string Volatility(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      if(index < 0)
+         return "Unknown";
+      return m_high_volatility[index] ? "High" : "Normal";
+   }
+
+   bool IsRanging(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 && m_ranging[index];
+   }
+
+   bool IsHighVolatility(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 && m_high_volatility[index];
+   }
+
+   bool IsSpreadQualityAcceptable(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 && m_spread_points[index] <= m_max_spread_points;
+   }
+
+   bool IsTickVolumeQualityAcceptable(const string symbol = "")
+   {
+      const int index = FindSymbolIndex(symbol == "" ? _Symbol : symbol);
+      return index >= 0 && m_volume_ratios[index] >= 1.0;
+   }
+};
+
+
+
+//+------------------------------------------------------------------+
+//| Decision engine                                                   |
+//+------------------------------------------------------------------+
+enum DecisionType
+{
+   DECISION_NO_TRADE = 0,
+   DECISION_BUY = 1,
+   DECISION_SELL = -1
+};
+
+class CDecisionEngine
+{
+private:
+   string       m_symbols[];
+   DecisionType m_decisions[];
+   double       m_confidence[];
+   string       m_reasons[];
+   int          m_symbol_count;
+   int          m_max_spread_points;
+   int          m_minimum_market_score;
+
+   int FindSymbolIndex(const string symbol)
+   {
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         if(m_symbols[index] == symbol)
+            return index;
+      }
+
+      return -1;
+   }
+
+   double ClampConfidence(const double value)
+   {
+      return MathMax(0.0, MathMin(100.0, MathRound(value)));
+   }
+
+   string DecisionToText(const DecisionType decision)
+   {
+      if(decision == DECISION_BUY)
+         return "BUY";
+      if(decision == DECISION_SELL)
+         return "SELL";
+      return "NO TRADE";
+   }
+
+   void AddReason(string &reason, const string item)
+   {
+      if(reason != "")
+         reason += "; ";
+      reason += item;
+   }
+
+public:
+   CDecisionEngine()
+   {
+      m_symbol_count = 0;
+      m_max_spread_points = 0;
+      m_minimum_market_score = 0;
+   }
+
+   bool Init(CMarketDataManager &market_data,
+             const int max_spread_points,
+             const int minimum_market_score,
+             CLogger &logger)
+   {
+      m_symbol_count = market_data.SymbolCount();
+      m_max_spread_points = max_spread_points;
+      m_minimum_market_score = minimum_market_score;
+
+      ArrayResize(m_symbols, m_symbol_count);
+      ArrayResize(m_decisions, m_symbol_count);
+      ArrayResize(m_confidence, m_symbol_count);
+      ArrayResize(m_reasons, m_symbol_count);
+
+      for(int index = 0; index < m_symbol_count; index++)
+      {
+         m_symbols[index] = market_data.SymbolAt(index);
+         m_decisions[index] = DECISION_NO_TRADE;
+         m_confidence[index] = 0.0;
+         m_reasons[index] = "Decision engine awaiting market scan";
+      }
+
+      logger.Info(StringFormat("Decision engine initialized for %d symbol(s).", m_symbol_count));
+      return m_symbol_count > 0;
+   }
+
+   DecisionType EvaluateDecision(const string symbol, CIndicatorEngine &indicator_engine, CMarketScanner &scanner, CLogger &logger)
+   {
+      const int index = FindSymbolIndex(symbol);
+      if(index < 0)
+         return DECISION_NO_TRADE;
+
+      const bool bullish = indicator_engine.TrendIsBullish(symbol);
+      const bool bearish = indicator_engine.TrendIsBearish(symbol);
+      const bool strong_adx = indicator_engine.TrendStrengthStrong(symbol);
+      const bool healthy_atr = !scanner.IsHighVolatility(symbol) && indicator_engine.GetATR(symbol) > 0.0;
+      const bool high_volume = indicator_engine.VolumeIsHigh(symbol);
+      const bool acceptable_volume = scanner.IsTickVolumeQualityAcceptable(symbol);
+      const bool acceptable_spread = scanner.IsSpreadQualityAcceptable(symbol);
+      const bool market_score_ok = scanner.GetMarketScore(symbol) >= m_minimum_market_score;
+      const bool tradable_market = scanner.IsMarketTradable(symbol);
+
+      string reason = "";
+      if(bullish)
+         AddReason(reason, "Strong bullish EMA alignment");
+      else if(bearish)
+         AddReason(reason, "Strong bearish trend");
+      else
+         AddReason(reason, "Weak trend");
+
+      AddReason(reason, strong_adx ? "ADX above threshold" : "ADX below threshold");
+      AddReason(reason, healthy_atr ? "Healthy ATR" : "Unhealthy ATR volatility");
+      AddReason(reason, high_volume ? "High volume" : (acceptable_volume ? "Acceptable volume" : "Low volume"));
+      AddReason(reason, acceptable_spread ? "Spread acceptable" : "High spread");
+      AddReason(reason, market_score_ok ? "Market quality score acceptable" : "Low market score");
+
+      double confidence = 0.0;
+      if(bullish || bearish)
+         confidence += 25.0;
+      if(strong_adx)
+         confidence += 20.0;
+      if(healthy_atr)
+         confidence += 15.0;
+      if(high_volume)
+         confidence += 15.0;
+      else if(acceptable_volume)
+         confidence += 8.0;
+      if(acceptable_spread)
+         confidence += 10.0;
+      if(market_score_ok)
+         confidence += 15.0;
+
+      DecisionType decision = DECISION_NO_TRADE;
+      if(tradable_market && strong_adx && healthy_atr && acceptable_spread && acceptable_volume)
       {
          if(bullish)
             decision = DECISION_BUY;
@@ -601,7 +870,7 @@ public:
       }
 
       if(decision == DECISION_NO_TRADE)
-         confidence = MathMin(confidence, (double)(m_minimum_confidence - 1));
+         confidence = MathMin(confidence, 59.0);
 
       m_decisions[index] = decision;
       m_confidence[index] = ClampConfidence(confidence);
@@ -653,60 +922,7 @@ public:
 };
 
 //+------------------------------------------------------------------+
-//| Money management                                                 |
-//+------------------------------------------------------------------+
-class CMoneyManagement
-{
-private:
-   bool   m_use_dynamic_lot;
-   double m_risk_percent;
-   int    m_reference_stop_points;
-   double m_fixed_lot;
-
-public:
-   void Init(const bool use_dynamic_lot, const double risk_percent, const int reference_stop_points, const double fixed_lot)
-   {
-      m_use_dynamic_lot = use_dynamic_lot;
-      m_risk_percent = risk_percent;
-      m_reference_stop_points = reference_stop_points;
-      m_fixed_lot = fixed_lot;
-   }
-
-   bool DynamicSizingEnabled()
-   {
-      return m_use_dynamic_lot;
-   }
-
-   double CalculateLot(const string symbol, const int stop_points)
-   {
-      if(!m_use_dynamic_lot)
-         return m_fixed_lot;
-
-      const int effective_stop = stop_points > 0 ? stop_points : m_reference_stop_points;
-      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-      const double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-      const double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-      const double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      if(effective_stop <= 0 || point <= 0.0 || tick_size <= 0.0 || tick_value <= 0.0 || equity <= 0.0)
-         return 0.0;
-
-      const double risk_cash = equity * m_risk_percent / 100.0;
-      const double loss_per_lot = effective_stop * point / tick_size * tick_value;
-      if(risk_cash <= 0.0 || loss_per_lot <= 0.0)
-         return 0.0;
-
-      const double min_lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-      const double max_lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-      const double lot_step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-      double lot = MathMax(min_lot, MathMin(max_lot, risk_cash / loss_per_lot));
-      if(lot_step > 0.0)
-         lot = MathFloor(lot / lot_step) * lot_step;
-      return NormalizeDouble(lot, 2);
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Risk manager                                                      |
+//| Risk manager skeleton                                            |
 //+------------------------------------------------------------------+
 class CRiskManager
 {
@@ -748,79 +964,6 @@ public:
    double LotSize(const string symbol)
    {
       return NormalizeLot(symbol, m_fixed_lot);
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Position manager                                                 |
-//+------------------------------------------------------------------+
-class CPositionManager
-{
-private:
-   ulong m_magic_number;
-   int   m_max_positions;
-
-public:
-   void Init(const ulong magic_number, const int max_positions)
-   {
-      m_magic_number = magic_number;
-      m_max_positions = max_positions;
-   }
-
-   int ManagedPositionCount(const string symbol)
-   {
-      int count = 0;
-      for(int index = 0; index < PositionsTotal(); index++)
-      {
-         const ulong ticket = PositionGetTicket(index);
-         if(ticket == 0 || !PositionSelectByTicket(ticket))
-            continue;
-         if(PositionGetString(POSITION_SYMBOL) == symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == m_magic_number)
-            count++;
-      }
-      return count;
-   }
-
-   bool HasDirection(const string symbol, const ENUM_POSITION_TYPE direction)
-   {
-      for(int index = 0; index < PositionsTotal(); index++)
-      {
-         const ulong ticket = PositionGetTicket(index);
-         if(ticket == 0 || !PositionSelectByTicket(ticket))
-            continue;
-         if(PositionGetString(POSITION_SYMBOL) == symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == m_magic_number && (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == direction)
-            return true;
-      }
-      return false;
-   }
-
-   bool CanOpenPosition(const string symbol)
-   {
-      return ManagedPositionCount(symbol) < m_max_positions;
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Hedging manager                                                  |
-//+------------------------------------------------------------------+
-class CHedgingManager
-{
-private:
-   bool m_allow_hedging;
-
-public:
-   void Init(const bool allow_hedging)
-   {
-      m_allow_hedging = allow_hedging;
-   }
-
-   bool CanOpenDirection(const string symbol, const DecisionType decision, CPositionManager &position_manager)
-   {
-      if(m_allow_hedging || decision == DECISION_NO_TRADE)
-         return true;
-      if(decision == DECISION_BUY)
-         return !position_manager.HasDirection(symbol, POSITION_TYPE_SELL);
-      return !position_manager.HasDirection(symbol, POSITION_TYPE_BUY);
    }
 };
 
@@ -895,44 +1038,7 @@ public:
 };
 
 //+------------------------------------------------------------------+
-//| Statistics                                                       |
-//+------------------------------------------------------------------+
-class CStatistics
-{
-private:
-   long m_evaluations;
-   long m_buy_decisions;
-   long m_sell_decisions;
-   long m_no_trade_decisions;
-
-public:
-   void Reset()
-   {
-      m_evaluations = 0;
-      m_buy_decisions = 0;
-      m_sell_decisions = 0;
-      m_no_trade_decisions = 0;
-   }
-
-   void RecordDecision(const DecisionType decision)
-   {
-      m_evaluations++;
-      if(decision == DECISION_BUY)
-         m_buy_decisions++;
-      else if(decision == DECISION_SELL)
-         m_sell_decisions++;
-      else
-         m_no_trade_decisions++;
-   }
-
-   string DecisionSummary()
-   {
-      return StringFormat("Evaluations: %I64d | BUY: %I64d | SELL: %I64d | NO TRADE: %I64d", m_evaluations, m_buy_decisions, m_sell_decisions, m_no_trade_decisions);
-   }
-};
-
-//+------------------------------------------------------------------+
-//| Dashboard                                                        |
+//| Dashboard skeleton                                               |
 //+------------------------------------------------------------------+
 class CDashboard
 {
@@ -945,13 +1051,13 @@ public:
       m_enabled = enabled;
    }
 
-   void Render(CMarketDataManager &market_data, CTradeEngine &trade_engine, CMarketScanner &scanner, CDecisionEngine &decision_engine, CStatistics &statistics)
+   void Render(CMarketDataManager &market_data, CTradeEngine &trade_engine, CMarketScanner &scanner, CDecisionEngine &decision_engine)
    {
       if(!m_enabled)
          return;
 
       string primary_symbol = market_data.SymbolAt(0);
-      string text = "ApexScalperPro Version 0.5\n";
+      string text = "ApexScalperPro Version 0.4\n";
       text += StringFormat("Trading: %s\n", trade_engine.TradingEnabled() ? "enabled" : "disabled");
       text += StringFormat("Symbols: %d\n", market_data.SymbolCount());
       text += StringFormat("Timeframe: %s\n", EnumToString(InpTimeframe));
@@ -963,7 +1069,6 @@ public:
       text += StringFormat("Decision: %s\n", decision_engine.DecisionText(primary_symbol));
       text += StringFormat("Confidence: %.0f%%\n", decision_engine.DecisionConfidence(primary_symbol));
       text += StringFormat("Reason: %s", decision_engine.DecisionReason(primary_symbol));
-      text += StringFormat("\n%s", statistics.DecisionSummary());
       Comment(text);
    }
 
@@ -978,18 +1083,12 @@ public:
 //| Global module instances                                          |
 //+------------------------------------------------------------------+
 CLogger            g_logger;
-CConfiguration     g_configuration;
 CMarketDataManager g_market_data;
 CRiskManager       g_risk_manager;
-CMoneyManagement   g_money_management;
-CPositionManager   g_position_manager;
-CHedgingManager    g_hedging_manager;
 CTradeEngine       g_trade_engine;
 CIndicatorEngine   g_indicator_engine;
 CMarketScanner     g_market_scanner;
-CSessionFilter     g_session_filter;
 CDecisionEngine    g_decision_engine;
-CStatistics        g_statistics;
 CDashboard         g_dashboard;
 
 //+------------------------------------------------------------------+
@@ -998,18 +1097,12 @@ CDashboard         g_dashboard;
 int OnInit()
 {
    g_logger.Init(InpLogPrefix, InpEnableLogging);
-   g_logger.Info("Initializing ApexScalperPro Version 1.0.");
-
-   if(!g_configuration.Validate(g_logger))
-      return INIT_PARAMETERS_INCORRECT;
+   g_logger.Info("Initializing ApexScalperPro Version 0.4.");
 
    if(!g_market_data.Init(InpSymbols, _Symbol, g_logger))
       return INIT_FAILED;
 
    g_risk_manager.Init(InpMaxSpreadPoints, InpFixedLot);
-   g_money_management.Init(InpUseDynamicLotSizing, InpRiskPerTradePercent, InpReferenceStopPoints, InpFixedLot);
-   g_position_manager.Init(InpMagicNumber, InpMaxManagedPositions);
-   g_hedging_manager.Init(InpAllowHedging);
 
    if(!g_indicator_engine.Init(g_market_data, InpTimeframe, InpFastEMAPeriod, InpSlowEMAPeriod, InpATRPeriod, InpADXPeriod,
                                InpVolumeAverageBars, InpStrongADXLevel, InpVolatilityATRPoints, InpHighVolumeMultiplier, g_logger))
@@ -1019,18 +1112,15 @@ int OnInit()
                              InpStrongADXLevel, InpRangingADXLevel, InpVolatilityATRPoints, InpHighVolumeMultiplier, g_logger))
       return INIT_FAILED;
 
-   g_session_filter.Init(InpUseSessionFilter, InpSessionStartHour, InpSessionEndHour);
-   if(!g_decision_engine.Init(g_market_data, InpMaxSpreadPoints, InpMinimumMarketScore,
-                              InpMinimumDecisionConfidence, InpMinimumEMAGapATR, InpMinimumDirectionalDIGap, g_logger))
+   if(!g_decision_engine.Init(g_market_data, InpMaxSpreadPoints, InpMinimumMarketScore, g_logger))
       return INIT_FAILED;
 
    g_trade_engine.Init(InpMagicNumber, InpDeviationPoints, InpEnableTrading);
-   g_statistics.Reset();
    g_dashboard.Init(InpEnableDashboard);
    g_market_scanner.Scan(g_market_data, g_indicator_engine, g_logger);
    for(int index = 0; index < g_market_data.SymbolCount(); index++)
-      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_session_filter, g_logger));
-   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics);
+      g_decision_engine.EvaluateDecision(g_market_data.SymbolAt(index), g_indicator_engine, g_market_scanner, g_logger);
+   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine);
 
    g_logger.Info("Initialization completed successfully.");
    return INIT_SUCCEEDED;
@@ -1052,7 +1142,7 @@ void OnTick()
          continue;
 
       g_market_scanner.ScanSymbol(symbol, g_market_data, g_indicator_engine, g_logger);
-      g_statistics.RecordDecision(g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_session_filter, g_logger));
+      g_decision_engine.EvaluateDecision(symbol, g_indicator_engine, g_market_scanner, g_logger);
 
       const int spread_points = g_market_data.SpreadPoints(symbol);
       if(!g_risk_manager.IsSpreadAllowed(symbol, spread_points, g_logger))
@@ -1063,16 +1153,13 @@ void OnTick()
       // Version 0.4 evaluates decisions only; trade execution remains disabled until a later milestone.
       if(!g_decision_engine.ShouldTrade(symbol))
          continue;
-      const DecisionType decision = g_decision_engine.EvaluateDecision(symbol);
-      if(!g_position_manager.CanOpenPosition(symbol) || !g_hedging_manager.CanOpenDirection(symbol, decision, g_position_manager))
-         continue;
 
-      const double lot = g_risk_manager.NormalizeLot(symbol, g_money_management.CalculateLot(symbol, InpReferenceStopPoints));
+      const double lot = g_risk_manager.LotSize(symbol);
       if(lot <= 0.0)
          g_logger.Warn(StringFormat("Calculated lot size for %s is invalid: %.2f", symbol, lot));
    }
 
-   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine, g_statistics);
+   g_dashboard.Render(g_market_data, g_trade_engine, g_market_scanner, g_decision_engine);
 }
 
 //+------------------------------------------------------------------+
